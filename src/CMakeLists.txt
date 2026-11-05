@@ -7,6 +7,7 @@ add_library(tiny_agent_core STATIC
     infra/error.c
     config.c
     context/session.c
+    infra/http_client.c
 )
 
 add_library(TinyAgent::Core ALIAS tiny_agent_core)

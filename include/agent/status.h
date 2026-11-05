@@ -12,6 +12,7 @@ typedef enum {
     AGENT_ERR_LLM_FILTERED,
     AGENT_ERR_LLM_RESPONSE,
     AGENT_ERR_TOOL_UNSUPPORTED,
+    AGENT_ERR_HTTP,
 } AgentStatus;
 
 #endif // TINY_AGENT_STATUS
