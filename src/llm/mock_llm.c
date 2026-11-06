@@ -34,6 +34,20 @@ static int copy_response(const LLMResponse *source, LLMResponse **out) {
   if (status != AGENT_OK)
     goto fail;
   copy->finish_reason = source->finish_reason;
+  copy->continuation.format = source->continuation.format;
+  status = copy_string(&copy->continuation.items_json,
+                       source->continuation.items_json);
+  if (status != AGENT_OK)
+    goto fail;
+  status = copy_string(&copy->provider_status, source->provider_status);
+  if (status != AGENT_OK)
+    goto fail;
+  status = copy_string(&copy->provider_reason, source->provider_reason);
+  if (status != AGENT_OK)
+    goto fail;
+  status = copy_string(&copy->refusal, source->refusal);
+  if (status != AGENT_OK)
+    goto fail;
   if (source->tool_call_count) {
     copy->tool_calls =
         calloc(source->tool_call_count, sizeof(*copy->tool_calls));

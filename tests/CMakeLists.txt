@@ -46,6 +46,11 @@ target_link_libraries(test_openai_json PRIVATE TinyAgent::Core PkgConfig::CJSON)
 tiny_agent_enable_warnings(test_openai_json)
 add_test(NAME test_openai_json COMMAND test_openai_json)
 
+add_executable(test_openai_responses test_openai_responses.c)
+target_link_libraries(test_openai_responses PRIVATE TinyAgent::Core PkgConfig::CJSON)
+tiny_agent_enable_warnings(test_openai_responses)
+add_test(NAME test_openai_responses COMMAND test_openai_responses)
+
 if (Python3_Interpreter_FOUND)
     add_executable(test_openai_complete test_openai_complete.c)
     target_link_libraries(test_openai_complete PRIVATE TinyAgent::Core)

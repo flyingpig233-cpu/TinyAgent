@@ -12,6 +12,10 @@ void llm_response_destroy(LLMResponse *response) {
     free(response->tool_calls[i].arguments_json);
   }
   free(response->tool_calls);
+  free(response->provider_status);
+  free(response->provider_reason);
+  free(response->refusal);
+  free(response->continuation.items_json);
   free(response);
 }
 

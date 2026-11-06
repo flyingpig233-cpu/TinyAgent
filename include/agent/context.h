@@ -1,6 +1,7 @@
 #ifndef TINY_AGENT_CONTEXT_H
 #define TINY_AGENT_CONTEXT_H
 
+#include "agent/continuation.h"
 #include "agent/error.h"
 #include "agent/tool.h"
 
@@ -17,6 +18,7 @@ typedef enum {
 typedef struct {
   MessageRole role;
   const char *content;
+  const char *refusal; // Optional assistant refusal; copied with the message.
 
   // For LLM responses that include tool calls
   ToolCall *tool_calls;
@@ -25,6 +27,7 @@ typedef struct {
   // For tool messages that include tool call information
   char *tool_call_id;
   char *tool_name;
+  LLMContinuation continuation;
 } Message;
 
 typedef struct {

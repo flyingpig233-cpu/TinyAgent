@@ -33,8 +33,10 @@ int context_add_assistant_response(Context *ctx, const LLMResponse *response,
   Message message = {
       .role = ASSISTANT_MESSAGE,
       .content = response->content,
+      .refusal = response->refusal,
       .tool_calls = response->tool_calls,
       .tool_call_count = response->tool_call_count,
+      .continuation = response->continuation,
   };
 
   return context_append(ctx, &message);
@@ -47,8 +49,10 @@ static int context_copy_optional_string(char **dest, const char *src) {
 
 static void message_clear(Message *message) {
   free((void *)message->content);
+  free((void *)message->refusal);
   free(message->tool_call_id);
   free(message->tool_name);
+  free(message->continuation.items_json);
   for (size_t i = 0; i < message->tool_call_count; ++i) {
     free(message->tool_calls[i].arguments_json);
     free(message->tool_calls[i].call_id);
@@ -65,7 +69,14 @@ int context_append(Context *ctx, const Message *message) {
   if (array->count > array->capacity ||
       (array->capacity > 0 && array->items == NULL) ||
       message->role < SYSTEM_MESSAGE || message->role > TOOL_MESSAGE ||
-      (message->tool_call_count > 0 && message->tool_calls == NULL))
+      (message->tool_call_count > 0 && message->tool_calls == NULL) ||
+      (message->refusal != NULL && message->role != ASSISTANT_MESSAGE) ||
+      (message->continuation.format != LLM_CONTINUATION_NONE &&
+       message->continuation.format != LLM_CONTINUATION_OPENAI_RESPONSES) ||
+      ((message->continuation.items_json != NULL) !=
+       (message->continuation.format != LLM_CONTINUATION_NONE)) ||
+      (message->continuation.format != LLM_CONTINUATION_NONE &&
+       message->role != ASSISTANT_MESSAGE))
     return AGENT_ERR_INVAILD_ARGUMENT;
 
   const size_t max_capacity = SIZE_MAX / sizeof(Message);
@@ -78,6 +89,18 @@ int context_append(Context *ctx, const Message *message) {
   char *content = NULL;
   AgentStatus status = context_copy_optional_string(&content, message->content);
   copy.content = content;
+  if (status != AGENT_OK)
+    goto fail;
+
+  char *refusal = NULL;
+  status = context_copy_optional_string(&refusal, message->refusal);
+  copy.refusal = refusal;
+  if (status != AGENT_OK)
+    goto fail;
+
+  copy.continuation.format = message->continuation.format;
+  status = context_copy_optional_string(&copy.continuation.items_json,
+                                        message->continuation.items_json);
   if (status != AGENT_OK)
     goto fail;
   status =

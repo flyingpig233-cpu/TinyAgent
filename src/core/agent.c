@@ -94,6 +94,12 @@ int agent_run(Agent *agent, Session *session, const char *input, String *output,
       status = run_error(error, AGENT_ERR_LLM_FILTERED,
                          "Model response was filtered");
       break;
+    case LLM_FINISH_REFUSED:
+      status =
+          run_error(error, AGENT_ERR_LLM_REFUSED,
+                    response->refusal != NULL ? response->refusal
+                                              : "Model refused the request");
+      break;
     default:
       status = run_error(error, AGENT_ERR_LLM_RESPONSE,
                          "Unknown model finish reason");

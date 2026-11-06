@@ -9,6 +9,9 @@ add_library(tiny_agent_core STATIC
     context/session.c
     infra/http_client.c
     llm/providers/openai.c
+    llm/providers/openai_chat.c
+    llm/providers/openai_responses.c
+    llm/providers/openai_json.c
 )
 
 add_library(TinyAgent::Core ALIAS tiny_agent_core)
