@@ -1,15 +1,15 @@
 #ifndef TINY_AGENT_INFRA_H
 #define TINY_AGENT_INFRA_H
 
-#include <stddef.h>
 #include "agent/status.h"
+#include <stddef.h>
 
 // Owns a NUL-terminated string. length and capacity exclude the terminator.
 // Initialize with {0} or string_init before use. Do not shallow-copy ownership.
 typedef struct {
-    char *data;
-    size_t length;
-    size_t capacity;
+  char *data;
+  size_t length;
+  size_t capacity;
 } String;
 
 // Initialize a fresh object; destroy an existing string before reinitializing.

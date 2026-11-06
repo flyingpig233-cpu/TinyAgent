@@ -3,9 +3,8 @@
 
 enum { CONFIG_DEFAULT_MAX_ROUND = 20 };
 
-
 typedef struct {
-    int max_round;
+  int max_round;
 } AgentConfig;
 
 AgentConfig config_default();

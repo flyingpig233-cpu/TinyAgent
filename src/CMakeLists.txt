@@ -8,6 +8,7 @@ add_library(tiny_agent_core STATIC
     config.c
     context/session.c
     infra/http_client.c
+    llm/providers/openai.c
 )
 
 add_library(TinyAgent::Core ALIAS tiny_agent_core)
@@ -29,7 +30,7 @@ pkg_check_modules(
     libcjson
 )
 
-find_package(SQLite3 REQUIRED)
+# find_package(SQLite3 REQUIRED)
 
 target_link_libraries(tiny_agent_core
     PRIVATE

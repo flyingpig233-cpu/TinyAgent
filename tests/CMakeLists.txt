@@ -33,3 +33,23 @@ if (Python3_Interpreter_FOUND)
     add_test(NAME test_http_client
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/http_server_test.py $<TARGET_FILE:test_http_client>)
 endif()
+
+add_executable(test_openai_provider test_openai_provider.c)
+target_link_libraries(test_openai_provider PRIVATE TinyAgent::Core)
+tiny_agent_enable_warnings(test_openai_provider)
+add_test(NAME test_openai_provider COMMAND test_openai_provider)
+
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(CJSON REQUIRED IMPORTED_TARGET libcjson)
+add_executable(test_openai_json test_openai_json.c)
+target_link_libraries(test_openai_json PRIVATE TinyAgent::Core PkgConfig::CJSON)
+tiny_agent_enable_warnings(test_openai_json)
+add_test(NAME test_openai_json COMMAND test_openai_json)
+
+if (Python3_Interpreter_FOUND)
+    add_executable(test_openai_complete test_openai_complete.c)
+    target_link_libraries(test_openai_complete PRIVATE TinyAgent::Core)
+    tiny_agent_enable_warnings(test_openai_complete)
+    add_test(NAME test_openai_complete
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/openai_server_test.py $<TARGET_FILE:test_openai_complete>)
+endif()

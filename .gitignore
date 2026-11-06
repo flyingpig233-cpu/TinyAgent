@@ -1,6 +1,7 @@
 /build/
 /build-*/
 /cmake-build-*/
+/.VSCodeCounter/
 /.cache/
 *.o
 *.a
