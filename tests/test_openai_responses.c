@@ -40,7 +40,8 @@ static int test_encode(void) {
                              "{\"type\":\"object\",\"properties\":{},"
                              "\"additionalProperties\":false}",
                          .strict = 1};
-  LLMRequest request = {.context = &ctx, .tools = &tool, .tool_count = 1};
+  const ToolDefinition *tool_pointers[] = {&tool};
+  LLMRequest request = {.context = &ctx, .tools = tool_pointers, .tool_count = 1};
   for (int protocol = 0; protocol < 2; ++protocol) {
     char *json = NULL;
     int (*encode)(const LLMRequest *, const char *, char **) =
@@ -103,7 +104,11 @@ static int test_encode(void) {
     request.tools = NULL;
     CHECK(encode(&request, "model", &json) == AGENT_ERR_INVAILD_ARGUMENT &&
           json == NULL);
-    request.tools = &tool;
+    request.tools = tool_pointers;
+    tool_pointers[0] = NULL;
+    CHECK(encode(&request, "model", &json) == AGENT_ERR_INVAILD_ARGUMENT &&
+          json == NULL);
+    tool_pointers[0] = &tool;
     tool.strict = 1;
   }
   char *json = NULL;

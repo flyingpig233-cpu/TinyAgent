@@ -10,11 +10,11 @@ typedef struct Context Context;
 
 typedef enum {
   LLM_FINISH_UNKNOWN,
-  LLM_FINISH_STOP,       // 正常完成
-  LLM_FINISH_TOOL_CALLS, // 请求调用工具
-  LLM_FINISH_LENGTH,     // 达到输出长度限制
-  LLM_FINISH_FILTERED,   // 输出被过滤
-  LLM_FINISH_REFUSED     // 模型拒绝请求
+  LLM_FINISH_STOP,
+  LLM_FINISH_TOOL_CALLS,
+  LLM_FINISH_LENGTH,
+  LLM_FINISH_FILTERED,
+  LLM_FINISH_REFUSED
 } LLMFinishReason;
 
 typedef struct LLMResponse {
@@ -36,7 +36,7 @@ typedef struct LLMResponse {
 
 typedef struct {
   const Context *context;
-  const ToolDefinition *tools; // Borrowed for the duration of complete().
+  const ToolDefinition *const *tools; // Borrowed for the duration of complete().
   size_t tool_count;
 } LLMRequest;
 

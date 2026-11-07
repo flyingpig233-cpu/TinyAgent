@@ -8,7 +8,7 @@
 
 typedef struct Agent Agent;
 
-int agent_create(const AgentConfig *config, LLMProvider *provider, Agent **out);
+int agent_create(const AgentConfig *config, LLMProvider *provider, ToolRegistry *registry, Agent **out);
 
 // output must be an initialized String; on success it is replaced.
 // On failure output is unchanged, but accepted messages remain in context.

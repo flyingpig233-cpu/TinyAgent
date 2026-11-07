@@ -55,11 +55,12 @@ int main(void) {
   LLMProvider provider = {.ops = {.complete = malformed}};
   AgentConfig config = {.max_round = 1};
   Agent *agent = NULL;
+  ToolRegistry registry = {0};
   Context context = {0};
   Session session = {.context = &context};
   String output = {0};
   CHECK(context_init(&context) == AGENT_OK);
-  CHECK(agent_create(&config, &provider, &agent) == AGENT_OK);
+  CHECK(agent_create(&config, &provider, &registry, &agent) == AGENT_OK);
   CHECK(agent_run(agent, &session, "one", &output, &error) ==
         AGENT_ERR_INVAILD_ARGUMENT);
   CHECK(context.array->count == 1);

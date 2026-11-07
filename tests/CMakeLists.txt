@@ -58,3 +58,24 @@ if (Python3_Interpreter_FOUND)
     add_test(NAME test_openai_complete
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/openai_server_test.py $<TARGET_FILE:test_openai_complete>)
 endif()
+
+add_executable(test_tool_registry test_tool_registry.c)
+target_link_libraries(test_tool_registry PRIVATE TinyAgent::Core PkgConfig::CJSON)
+tiny_agent_enable_warnings(test_tool_registry)
+add_test(NAME test_tool_registry COMMAND test_tool_registry)
+
+add_executable(test_list_dir test_list_dir.c)
+target_link_libraries(test_list_dir PRIVATE TinyAgent::Core PkgConfig::CJSON)
+tiny_agent_enable_warnings(test_list_dir)
+add_test(NAME test_list_dir COMMAND test_list_dir)
+
+add_executable(test_read_file test_read_file.c)
+target_link_libraries(test_read_file PRIVATE TinyAgent::Core PkgConfig::CJSON)
+tiny_agent_enable_warnings(test_read_file)
+add_test(NAME test_read_file COMMAND test_read_file)
+
+add_executable(test_coding_tools test_coding_tools.c)
+target_link_libraries(test_coding_tools PRIVATE TinyAgent::Core PkgConfig::CJSON)
+tiny_agent_enable_warnings(test_coding_tools)
+add_test(NAME test_coding_tools COMMAND test_coding_tools)
+set_tests_properties(test_coding_tools PROPERTIES TIMEOUT 15)

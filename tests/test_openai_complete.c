@@ -26,7 +26,8 @@ static int test_tools(const char *base, OpenAIProtocol protocol) {
   ToolDefinition tool = {.name = "weather",
                          .parameters_json = "{\"type\":\"object\"}",
                          .strict = 0};
-  LLMRequest request = {.context = &ctx, .tools = &tool, .tool_count = 1};
+  const ToolDefinition *tools[] = {&tool};
+  LLMRequest request = {.context = &ctx, .tools = tools, .tool_count = 1};
   LLMResponse *response = NULL;
   AgentError error = {0};
   CHECK(llm_provider_complete(provider, &request, &response, &error) ==
@@ -59,7 +60,8 @@ static int test_sessions(const char *base, OpenAIProtocol protocol) {
   CHECK(openai_provider_init(&provider, &config) == AGENT_OK);
   AgentConfig settings = config_default();
   Agent *agent = NULL;
-  CHECK(agent_create(&settings, provider, &agent) == AGENT_OK);
+  ToolRegistry registry = {0};
+  CHECK(agent_create(&settings, provider, &registry, &agent) == AGENT_OK);
   Session *a = NULL, *b = NULL;
   CHECK(session_init(&a, "a", "session-a") == AGENT_OK);
   CHECK(session_init(&b, "b", "session-b") == AGENT_OK);

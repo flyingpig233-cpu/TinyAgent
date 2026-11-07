@@ -48,8 +48,8 @@ int openai_add_tools(cJSON *root, const LLMRequest *request,
   if (tools == NULL)
     return AGENT_ERR_OUT_OF_MEMORY;
   for (size_t i = 0; i < request->tool_count; ++i) {
-    const ToolDefinition *tool = &request->tools[i];
-    if (tool->name == NULL || tool->name[0] == '\0' ||
+    const ToolDefinition *tool = request->tools[i];
+    if (tool == NULL || tool->name == NULL || tool->name[0] == '\0' ||
         tool->parameters_json == NULL ||
         (tool->strict != 0 && tool->strict != 1))
       return AGENT_ERR_INVAILD_ARGUMENT;
