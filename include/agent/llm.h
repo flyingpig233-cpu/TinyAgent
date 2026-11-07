@@ -45,6 +45,12 @@ typedef struct {
   int stream;
   void (*on_delta)(void *userdata, const char *text); // Borrowed text.
   void *delta_userdata;
+
+  // Optional poll hook. Providers call it periodically during a request; a
+  // nonzero return aborts the request with AGENT_ERR_CANCELLED. It may also be
+  // used to drive progress UI, so it should be cheap.
+  int (*is_cancelled)(void *userdata);
+  void *cancel_userdata;
 } LLMRequest;
 
 typedef struct {

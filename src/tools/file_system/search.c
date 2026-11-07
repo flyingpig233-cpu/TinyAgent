@@ -11,7 +11,6 @@ AgentStatus search_register(ToolRegistry *reg, AgentError *error) {
 }
 
 AgentStatus search(ToolContext *ctx, const cJSON *args, ToolOutput **out, AgentError *error) {
-  (void)ctx;
   AgentStatus status = tool_begin(args, out, error);
   if (status != AGENT_OK) return status;
   const char *pattern = tool_string(args, "pattern"), *path, *glob;
@@ -32,7 +31,7 @@ AgentStatus search(ToolContext *ctx, const cJSON *args, ToolOutput **out, AgentE
   argv[count++] = "--"; argv[count++] = (char *)(path == NULL ? "." : path);
   argv[count] = NULL;
   ToolProcess process;
-  status = tool_process(argv, NULL, 10000, TOOL_FILE_LIMIT, &process, error);
+  status = tool_process(argv, NULL, 10000, TOOL_FILE_LIMIT, ctx, &process, error);
   if (status != AGENT_OK) return status;
   cJSON *json = cJSON_CreateObject(), *matches = cJSON_CreateArray();
   if (json == NULL || matches == NULL || !cJSON_AddItemToObject(json, "matches", matches)) {

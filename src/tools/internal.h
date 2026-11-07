@@ -21,7 +21,8 @@ typedef struct {
 } ToolProcess;
 void tool_process_destroy(ToolProcess *result);
 AgentStatus tool_process(char *const argv[], const char *cwd, int timeout_ms,
-                         size_t limit, ToolProcess *result, AgentError *error);
+                         size_t limit, ToolContext *ctx, ToolProcess *result,
+                         AgentError *error);
 // Owns neither result nor its strings; the returned JSON is owned by the caller.
 cJSON *tool_process_json(const ToolProcess *result);
 #endif

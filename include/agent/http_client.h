@@ -12,6 +12,11 @@ typedef struct {
 
 typedef struct HttpClient HttpClient;
 
+// Called periodically while a transfer is in flight (libcurl polls it roughly
+// every 100 ms). Returning nonzero aborts the transfer with
+// AGENT_ERR_CANCELLED. It may be used to drive UI updates as well.
+typedef int (*HttpProgressFn)(void *userdata);
+
 typedef struct {
   const char *method;         // NULL defaults to GET.
   const char *url;            // HTTP or HTTPS URL, required.
@@ -19,8 +24,10 @@ typedef struct {
   size_t header_count;
   const void *body; // Binary request body, borrowed for this call.
   size_t body_len;
-  long connect_timeout_ms; // 0 uses the 10 second default.
-  long timeout_ms;         // 0 uses the 60 second default.
+  long connect_timeout_ms;     // 0 uses the 10 second default.
+  long timeout_ms;             // 0 uses the 60 second default.
+  HttpProgressFn on_progress;  // Optional cancellation/tick hook.
+  void *progress_userdata;     // Passed to on_progress unchanged.
 } HttpRequest;
 
 // Clients are reusable, but must not be used concurrently. Each successful
@@ -28,7 +35,7 @@ typedef struct {
 int http_client_init(HttpClient **client);
 
 // Receives a chunk of the response body as it arrives. Return the number of
-// bytes accepted; returning a value other than len aborts the transfer.
+// bytes accepted; returning a value other than len aborts with AGENT_ERR_HTTP.
 typedef size_t (*HttpWriteFn)(void *userdata, const char *data, size_t len);
 
 // Like http_client_request, but streams the body to write() instead of

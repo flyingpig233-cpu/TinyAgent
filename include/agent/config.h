@@ -41,6 +41,14 @@ typedef struct {
   // Optional tool-approval callback run before each tool call. NULL allows all.
   ToolApprovalFn on_tool_approval;
   void *approval_userdata; // Passed to on_tool_approval unchanged; may be NULL.
+
+  // Optional cooperative cancellation hook, polled before each round, before
+  // each tool call and during provider requests and tool subprocesses. A
+  // nonzero return aborts the run with AGENT_ERR_CANCELLED. As it is also
+  // invoked periodically while waiting, it is a convenient place to pump UI
+  // updates. NULL disables cancellation checks.
+  int (*is_cancelled)(void *userdata);
+  void *cancel_userdata; // Passed to is_cancelled unchanged; may be NULL.
 } AgentConfig;
 
 AgentConfig config_default();

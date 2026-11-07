@@ -1,5 +1,6 @@
 add_executable(tiny-agent
     main.c
+    ui.c
 )
 
 target_link_libraries(tiny-agent PRIVATE TinyAgent::Core)

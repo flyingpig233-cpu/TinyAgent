@@ -17,6 +17,11 @@ static void agent_delta_bridge(void *userdata, const char *text) {
                             text);
 }
 
+static int agent_cancelled(const Agent *agent) {
+  return agent->config->is_cancelled != NULL &&
+         agent->config->is_cancelled(agent->config->cancel_userdata) != 0;
+}
+
 static int run_error(AgentError *error, int status, const char *message) {
   if (error != NULL) {
     agent_error_set(error, message, __FILE__, __func__, __LINE__);
@@ -37,7 +42,12 @@ static int execute_tool_calls(Agent *agent, Session *session, int round,
                      "Tool call response contains no calls");
 
   *failed = 0;
+  int cancelled = 0;
+  ToolContext tool_ctx = {.is_cancelled = agent->config->is_cancelled,
+                          .userdata = agent->config->cancel_userdata};
   for (size_t i = 0; i < response->tool_call_count; ++i) {
+    if (!cancelled && agent_cancelled(agent))
+      cancelled = 1;
     ToolCall call = response->tool_calls[i];
     if (call.call_id == NULL || call.call_id[0] == '\0' ||
         call.tool_name == NULL || call.tool_name[0] == '\0' ||
@@ -58,7 +68,10 @@ static int execute_tool_calls(Agent *agent, Session *session, int round,
     const char *content = NULL;
     int is_error = 0;
     cJSON *args = NULL;
-    if (tool == NULL) {
+    if (cancelled) {
+      content = "Error: tool call cancelled by host";
+      is_error = 1;
+    } else if (tool == NULL) {
       content = "Error: requested tool is not registered";
       is_error = 1;
     } else if ((args = cJSON_ParseWithOpts(call.arguments_json, NULL, 1)) == NULL ||
@@ -82,8 +95,13 @@ static int execute_tool_calls(Agent *agent, Session *session, int round,
         content = "Error: tool call denied by host";
         is_error = 1;
       } else {
-        int status = tool->fn(NULL, args, &tool_output, &tool_error);
-        if (status != AGENT_OK) {
+        int status = tool->fn(&tool_ctx, args, &tool_output, &tool_error);
+        if (status == AGENT_ERR_CANCELLED) {
+          cancelled = 1;
+          content = tool_error.message[0] ? tool_error.message
+                                          : "Error: tool call cancelled by host";
+          is_error = 1;
+        } else if (status != AGENT_OK) {
           content = tool_error.message[0] ? tool_error.message
                                           : "Error: tool execution failed";
           is_error = 1;
@@ -118,7 +136,8 @@ static int execute_tool_calls(Agent *agent, Session *session, int round,
     if (status != AGENT_OK)
       return run_error(error, status, "Could not append tool result");
   }
-  return AGENT_OK;
+  return cancelled ? run_error(error, AGENT_ERR_CANCELLED, "Run cancelled")
+                   : AGENT_OK;
 }
 
 static int run_rounds(Agent *agent, Session *session, String *output,
@@ -128,6 +147,8 @@ static int run_rounds(Agent *agent, Session *session, String *output,
                         ? agent->config->max_tool_retries
                         : CONFIG_DEFAULT_MAX_TOOL_RETRIES;
   for (int i = 0; i < agent->config->max_round; ++i) {
+    if (agent_cancelled(agent))
+      return run_error(error, AGENT_ERR_CANCELLED, "Run cancelled");
     int round = i + 1;
     agent->current_round = round;
     LLMRequest request = {.context = session->context,
@@ -135,7 +156,9 @@ static int run_rounds(Agent *agent, Session *session, String *output,
                           .tool_count = agent->registry->count,
                           .stream = agent->config->stream,
                           .on_delta = agent_delta_bridge,
-                          .delta_userdata = agent};
+                          .delta_userdata = agent,
+                          .is_cancelled = agent->config->is_cancelled,
+                          .cancel_userdata = agent->config->cancel_userdata};
     LLMResponse *response = NULL;
     AgentError provider_error = {0};
     int status = llm_provider_complete(agent->llm_provider, &request, &response,
@@ -247,6 +270,8 @@ int agent_run(Agent *agent, Session *session, const char *input, String *output,
   if (agent->config->max_round <= 0)
     return run_error(error, AGENT_ERR_INVAILD_ARGUMENT,
                      "max_round must be positive");
+  if (agent_cancelled(agent))
+    return run_error(error, AGENT_ERR_CANCELLED, "Run cancelled");
 
   Message msg = {.content = input, .role = USER_MESSAGE};
   int status = context_append(session->context, &msg);

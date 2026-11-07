@@ -6,7 +6,15 @@
 #include "agent/error.h"
 #include "agent/status.h"
 
+// Per-call context supplied by the host. Tools that can block (notably
+// run_command and search) poll is_cancelled so a run can be interrupted; tools
+// may also use it to pump progress UI. NULL means no cancellation support.
+struct ToolContext {
+  int (*is_cancelled)(void *userdata);
+  void *userdata;
+};
 typedef struct ToolContext ToolContext;
+
 typedef struct {
   char *content;
   int is_error; // 0 or 1

@@ -62,7 +62,8 @@ void tool_process_destroy(ToolProcess *result) {
 }
 
 AgentStatus tool_process(char *const argv[], const char *cwd, int timeout_ms,
-                         size_t limit, ToolProcess *result, AgentError *error) {
+                         size_t limit, ToolContext *ctx, ToolProcess *result,
+                         AgentError *error) {
   *result = (ToolProcess){.exit_code = -1};
   int pipes[2][2] = {{-1, -1}, {-1, -1}};
   pid_t child = -1;
@@ -110,6 +111,13 @@ AgentStatus tool_process(char *const argv[], const char *cwd, int timeout_ms,
       if (!reaped) (void)kill(child, SIGKILL);
     }
     if (result->timed_out && now >= deadline + 200) break;
+    /* Poll the host's cancel hook here as well, so interrupting a long command
+     * kills the whole process group instead of waiting for the timeout. */
+    if (ctx != NULL && ctx->is_cancelled != NULL &&
+        ctx->is_cancelled(ctx->userdata)) {
+      status = AGENT_ERR_CANCELLED;
+      goto done;
+    }
     struct pollfd fds[2] = {
         {.fd = pipes[0][0], .events = POLLIN},
         {.fd = pipes[1][0], .events = POLLIN}};
@@ -163,7 +171,10 @@ done:
   }
   if (status != AGENT_OK) {
     tool_process_destroy(result);
-    return tool_fail(error, status, "Could not execute or capture process");
+    return tool_fail(error, status,
+                     status == AGENT_ERR_CANCELLED
+                         ? "Tool execution cancelled"
+                         : "Could not execute or capture process");
   }
   return AGENT_OK;
 }

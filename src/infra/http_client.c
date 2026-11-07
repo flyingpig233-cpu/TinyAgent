@@ -14,10 +14,24 @@ struct HttpClient {
  * caller-supplied write callback. Exactly one of collect/write is normally set. */
 typedef struct {
   HttpResponse *collect;
+  size_t capacity; // Allocated bytes, including the trailing NUL.
   HttpWriteFn write;
   void *userdata;
-  int failed;
+  int failed; // Internal allocation/overflow failure, not a consumer abort.
 } BodySink;
+
+/* Bridges libcurl's transfer-info callback to the caller's progress hook.
+ * Returning nonzero makes libcurl abort with CURLE_ABORTED_BY_CALLBACK. */
+static int progress_trampoline(void *userdata, curl_off_t dltotal,
+                               curl_off_t dlnow, curl_off_t ultotal,
+                               curl_off_t ulnow) {
+  const HttpRequest *request = userdata;
+  (void)dltotal;
+  (void)dlnow;
+  (void)ultotal;
+  (void)ulnow;
+  return request->on_progress(request->progress_userdata) ? 1 : 0;
+}
 
 static size_t sink_write(char *data, size_t size, size_t count,
                          void *user_data) {
@@ -33,21 +47,30 @@ static size_t sink_write(char *data, size_t size, size_t count,
       return 0;
     }
     size_t length = sink->collect->body_len + bytes;
-    char *body = realloc(sink->collect->body, length + 1);
-    if (body == NULL) {
-      sink->failed = 1;
-      return 0;
+    if (length + 1 > sink->capacity) {
+      size_t capacity = sink->capacity ? sink->capacity : 4096;
+      while (capacity < length + 1) {
+        if (capacity > SIZE_MAX / 2) {
+          capacity = length + 1;
+          break;
+        }
+        capacity *= 2;
+      }
+      char *body = realloc(sink->collect->body, capacity);
+      if (body == NULL) {
+        sink->failed = 1;
+        return 0;
+      }
+      sink->collect->body = body;
+      sink->capacity = capacity;
     }
     if (bytes != 0)
-      memcpy(body + sink->collect->body_len, data, bytes);
-    body[length] = '\0';
-    sink->collect->body = body;
+      memcpy(sink->collect->body + sink->collect->body_len, data, bytes);
+    sink->collect->body[length] = '\0';
     sink->collect->body_len = length;
   }
-  if (sink->write != NULL && sink->write(sink->userdata, data, bytes) != bytes) {
-    sink->failed = 1;
+  if (sink->write != NULL && sink->write(sink->userdata, data, bytes) != bytes)
     return 0;
-  }
   return bytes;
 }
 
@@ -135,6 +158,11 @@ static int perform(HttpClient *client, const HttpRequest *request,
   if (request->method != NULL || request->body != NULL)
     SETOPT(CURLOPT_CUSTOMREQUEST,
            request->method != NULL ? request->method : "GET");
+  if (request->on_progress != NULL) {
+    SETOPT(CURLOPT_NOPROGRESS, 0L);
+    SETOPT(CURLOPT_XFERINFOFUNCTION, progress_trampoline);
+    SETOPT(CURLOPT_XFERINFODATA, (void *)request);
+  }
   result = curl_easy_perform(client->handle);
   if (result != CURLE_OK)
     goto curl_failed;
@@ -147,12 +175,19 @@ static int perform(HttpClient *client, const HttpRequest *request,
   goto done;
 
 curl_failed:
-  status = sink->failed                        ? AGENT_ERR_OUT_OF_MEMORY
-           : result == CURLE_OPERATION_TIMEDOUT ? AGENT_ERR_HTTP_TIMEOUT
-                                                : AGENT_ERR_HTTP;
-  ERROR(error, sink->failed   ? "Could not allocate HTTP response"
-               : curl_error[0] ? curl_error
-                               : curl_easy_strerror(result));
+  if (sink->failed) {
+    status = AGENT_ERR_OUT_OF_MEMORY;
+    ERROR(error, "Could not allocate HTTP response");
+  } else if (result == CURLE_ABORTED_BY_CALLBACK) {
+    status = AGENT_ERR_CANCELLED;
+    ERROR(error, "HTTP request cancelled");
+  } else if (result == CURLE_OPERATION_TIMEDOUT) {
+    status = AGENT_ERR_HTTP_TIMEOUT;
+    ERROR(error, curl_error[0] ? curl_error : curl_easy_strerror(result));
+  } else {
+    status = AGENT_ERR_HTTP;
+    ERROR(error, curl_error[0] ? curl_error : curl_easy_strerror(result));
+  }
 done:
   curl_slist_free_all(headers);
   return status;

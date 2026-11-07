@@ -10,7 +10,6 @@ AgentStatus run_command_register(ToolRegistry *reg, AgentError *error) {
 }
 
 AgentStatus run_command(ToolContext *ctx, const cJSON *args, ToolOutput **out, AgentError *error) {
-  (void)ctx;
   AgentStatus status = tool_begin(args, out, error);
   if (status != AGENT_OK) return status;
   const char *command = tool_string(args, "command"), *cwd;
@@ -21,7 +20,7 @@ AgentStatus run_command(ToolContext *ctx, const cJSON *args, ToolOutput **out, A
     return tool_fail(error, AGENT_ERR_INVAILD_ARGUMENT, "Invalid command, cwd, timeout_ms or max_output_bytes");
   char *argv[] = {"/bin/sh", "-c", (char *)command, NULL};
   ToolProcess result;
-  status = tool_process(argv, cwd, timeout, (size_t)limit, &result, error);
+  status = tool_process(argv, cwd, timeout, (size_t)limit, ctx, &result, error);
   if (status != AGENT_OK) return status;
   cJSON *json = tool_process_json(&result);
   status = tool_json(json, result.exit_code != 0 || result.timed_out, out, error);

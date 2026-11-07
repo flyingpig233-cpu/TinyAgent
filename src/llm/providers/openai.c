@@ -39,6 +39,15 @@ static int openai_complete_callback(void *ctx, const LLMRequest *request,
   return openai_provider_complete(ctx, request, out, error);
 }
 
+/* Adapts the LLMRequest cancel hook to the HTTP layer's progress hook. It also
+ * lets the host pump progress UI while a request is in flight. */
+static int openai_progress_bridge(void *userdata) {
+  const LLMRequest *request = userdata;
+  if (request->is_cancelled == NULL)
+    return 0;
+  return request->is_cancelled(request->cancel_userdata);
+}
+
 int openai_provider_init(LLMProvider **provider, const OpenAIConfig *config) {
   if (provider == NULL)
     return AGENT_ERR_NULL_POINTER;
@@ -159,7 +168,11 @@ int openai_provider_complete(OpenAIProvider *provider,
                               .body = req_json,
                               .body_len = strlen(req_json),
                               .connect_timeout_ms = provider->config.common.connect_timeout_ms,
-                              .timeout_ms = provider->config.common.timeout_ms};
+                              .timeout_ms = provider->config.common.timeout_ms,
+                              .on_progress = request->is_cancelled != NULL
+                                                 ? openai_progress_bridge
+                                                 : NULL,
+                              .progress_userdata = (void *)request};
   if (request->stream) {
     status = openai_stream_complete(
         provider->client, &http_request, provider->config.protocol,

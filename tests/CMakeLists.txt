@@ -25,6 +25,12 @@ target_link_libraries(test_tool_approval PRIVATE TinyAgent::Core)
 tiny_agent_enable_warnings(test_tool_approval)
 add_test(NAME test_tool_approval COMMAND test_tool_approval)
 
+add_executable(test_cancellation test_cancellation.c)
+target_link_libraries(test_cancellation PRIVATE TinyAgent::Core PkgConfig::CJSON)
+tiny_agent_enable_warnings(test_cancellation)
+add_test(NAME test_cancellation COMMAND test_cancellation)
+set_tests_properties(test_cancellation PROPERTIES TIMEOUT 15)
+
 add_executable(test_error_handling test_error_handling.c)
 target_link_libraries(test_error_handling PRIVATE TinyAgent::Core)
 tiny_agent_enable_warnings(test_error_handling)
@@ -97,4 +103,7 @@ if (Python3_Interpreter_FOUND)
     add_test(NAME test_cli_stream
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/cli_stream_test.py $<TARGET_FILE:tiny-agent>)
     set_tests_properties(test_cli_stream PROPERTIES TIMEOUT 30)
+    add_test(NAME test_cli_cancel
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/cli_cancel_test.py $<TARGET_FILE:tiny-agent>)
+    set_tests_properties(test_cli_cancel PROPERTIES TIMEOUT 40)
 endif()

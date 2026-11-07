@@ -17,6 +17,7 @@
 #include "agent/tools/file_system/search.h"
 #include "agent/tools/file_system/write_file.h"
 #include "agent/tools/run_command.h"
+#include "ui.h"
 
 #define CLI_DEFAULT_BASE_URL "https://api.deepseek.com/"
 #define CLI_DEFAULT_MODEL "deepseek-flash"
@@ -39,14 +40,20 @@ enum {
 /* ------------------------------------------------------------------ */
 
 static volatile sig_atomic_t g_interrupt = 0;
+/* Set while agent_run() is executing. Used only to decide whether echoing
+ * "^C" is safe without trampling the live status line. */
+static volatile sig_atomic_t g_run_active = 0;
 
 static void on_sigint(int sig) {
   (void)sig;
+  /* Setting the shared flag is async-signal-safe. The UI polls it and aborts
+   * the in-flight request or tool; libcurl sees it through CURLOPT_XFERINFO. */
   g_interrupt = 1;
-  /* write(2) is async-signal-safe, unlike printf. */
-  static const char message[] = "\n^C\n";
-  ssize_t ignored = write(STDERR_FILENO, message, sizeof(message) - 1);
-  (void)ignored;
+  if (!g_run_active) {
+    static const char message[] = "^C\n";
+    ssize_t ignored = write(STDERR_FILENO, message, sizeof(message) - 1);
+    (void)ignored;
+  }
 }
 
 static void install_signal_handlers(void) {
@@ -84,9 +91,9 @@ typedef struct {
   int quiet;
   int verbose;
   int output_json; /* --json / --output-format json: machine-readable result. */
-  int stream;    /* --stream: print assistant text as it is generated. */
-  int yes;       /* --yes: auto-approve mutating tools. */
-  int read_only; /* --read-only: deny mutating tools. */
+  int stream;      /* --stream: print assistant text as it is generated. */
+  int yes;         /* --yes: auto-approve mutating tools. */
+  int read_only;   /* --read-only: deny mutating tools. */
 } CliOptions;
 
 typedef enum {
@@ -103,6 +110,10 @@ static void print_help(const char *program) {
       "interactive\n"
       "session; with -p/--print (or a positional prompt) it runs once and "
       "exits.\n"
+      "\n"
+      "While a request or tool is running, Ctrl-C cancels it and returns to "
+      "the\n"
+      "prompt (interactive) or exits 130 (one-shot).\n"
       "\n"
       "Mutating tools (write_file, edit_file, run_command) ask for approval "
       "in\n"
@@ -134,13 +145,15 @@ static void print_help(const char *program) {
       "mode\n"
       "  -o, --output-format <fmt>  text | json (default: text)\n"
       "      --json                 Shorthand for --output-format json; emits\n"
-      "                             one JSON object on stdout (needs a prompt)\n"
+      "                             one JSON object on stdout (needs a "
+      "prompt)\n"
       "      --stream               Stream assistant text as it is generated\n"
       "\n"
       "Environment:\n"
-      "  TINY_AGENT_API_KEY / DEEPSEEK_API_KEY, DEEPSEEK_TIMEOUT_MS\n"
+      "  TINY_AGENT_API_KEY / DEEPSEEK_API_KEY, DEEPSEEK_TIMEOUT_MS, NO_COLOR\n"
       "\n"
-      "Exit codes: 0 success, 1 runtime error, 2 usage error, 130 interrupted\n",
+      "Exit codes: 0 success, 1 runtime error, 2 usage error, 130 "
+      "interrupted\n",
       program, CLI_DEFAULT_MODEL, CLI_DEFAULT_BASE_URL, CLI_DEFAULT_TIMEOUT_MS,
       CONFIG_DEFAULT_MAX_ROUND, CLI_DEFAULT_SYSTEM_PROMPT,
       CLI_DEFAULT_SESSION_ID);
@@ -457,6 +470,7 @@ typedef struct {
   int auto_approve; /* --yes: approve every mutating tool. */
   int read_only;    /* --read-only: deny every mutating tool. */
   int interactive;  /* Prompt on a TTY; otherwise deny mutating tools. */
+  Ui *ui;           /* Clears the live status line before prompting. */
 } CliApproval;
 
 /* Copies at most cap-1 bytes of the JSON arguments into buffer, adding an
@@ -490,6 +504,7 @@ static ToolDecision cli_approve(void *userdata, const char *tool_name,
   if (!policy->interactive)
     return TOOL_DECISION_DENY; /* Safe default when nobody can answer. */
 
+  ui_clear_status(policy->ui);
   char preview[201];
   preview_arguments(arguments_json, preview, sizeof(preview));
   fprintf(stderr,
@@ -509,138 +524,8 @@ static ToolDecision cli_approve(void *userdata, const char *tool_name,
   else if (line[0] == 'a' || line[0] == 'A')
     decision = TOOL_DECISION_ALLOW_ALL;
   free(line);
+  ui_set_phase(policy->ui, "thinking");
   return decision;
-}
-
-/* ------------------------------------------------------------------ */
-/* Event transcript                                                    */
-/* ------------------------------------------------------------------ */
-
-typedef struct {
-  FILE *out; /* NULL disables the transcript. */
-  int current_round;
-  int rounds;
-  int stream_to_stdout;      /* --stream and not --json. */
-  int streamed;              /* Any delta written this run. */
-  int streamed_needs_newline; /* Last delta did not end with a newline. */
-} CliDisplay;
-
-static const char *finish_reason_name(LLMFinishReason reason) {
-  switch (reason) {
-  case LLM_FINISH_STOP:
-    return "stop";
-  case LLM_FINISH_TOOL_CALLS:
-    return "tool_calls";
-  case LLM_FINISH_LENGTH:
-    return "length";
-  case LLM_FINISH_FILTERED:
-    return "filtered";
-  case LLM_FINISH_REFUSED:
-    return "refused";
-  default:
-    return "unknown";
-  }
-}
-
-static void print_tool_output(FILE *out, const char *text) {
-  const size_t limit = 500;
-  if (text == NULL)
-    return;
-  size_t length = strlen(text);
-  if (length <= limit) {
-    fprintf(out, "    %s\n", text);
-  } else {
-    fprintf(out, "    %.*s... (%zu bytes total)\n", (int)limit, text, length);
-  }
-}
-
-static void print_round_header(CliDisplay *display, int round) {
-  if (round <= 0 || round == display->current_round)
-    return;
-  display->current_round = round;
-  display->rounds = round;
-  fprintf(display->out, "\n--- round %d ---\n", round);
-}
-
-static void print_agent_event(void *userdata, const AgentEvent *event) {
-  CliDisplay *display = userdata;
-  /* Track the round count even when the transcript itself is suppressed, so
-   * --json can report how many model rounds the run took. */
-  if (event->type == AGENT_EVENT_RUN_START) {
-    display->current_round = 0;
-    display->rounds = 0;
-  } else if (event->type == AGENT_EVENT_LLM_RESPONSE &&
-             event->round > display->rounds) {
-    display->rounds = event->round;
-  }
-  if (display->out == NULL)
-    return;
-  FILE *out = display->out;
-  switch (event->type) {
-  case AGENT_EVENT_RUN_START:
-    fprintf(out, "\n=== agent run ===\n");
-    break;
-  case AGENT_EVENT_LLM_RESPONSE:
-    print_round_header(display, event->round);
-    fprintf(out, "[round %d] model: %s", event->round,
-            finish_reason_name(event->finish_reason));
-    if (event->finish_reason == LLM_FINISH_TOOL_CALLS)
-      fprintf(out, " (%zu tool call%s)", event->tool_call_count,
-              event->tool_call_count == 1 ? "" : "s");
-    fprintf(out, "\n");
-    /* Intermediate assistant text; the final answer is printed from the run
-     * result to avoid duplication. */
-    if (event->finish_reason != LLM_FINISH_STOP && event->content != NULL &&
-        event->content[0] != '\0')
-      fprintf(out, "[round %d] assistant: %s\n", event->round, event->content);
-    break;
-  case AGENT_EVENT_TOOL_CALL:
-    print_round_header(display, event->round);
-    fprintf(out, "[round %d] -> %s(%s)\n", event->round,
-            event->tool_name != NULL ? event->tool_name : "?",
-            event->arguments_json != NULL ? event->arguments_json : "");
-    break;
-  case AGENT_EVENT_TOOL_RESULT:
-    print_round_header(display, event->round);
-    fprintf(out, "[round %d] <- %s %s\n", event->round,
-            event->tool_name != NULL ? event->tool_name : "?",
-            event->tool_is_error ? "error" : "ok");
-    print_tool_output(out, event->tool_output);
-    break;
-  case AGENT_EVENT_RUN_END:
-    if (event->status == AGENT_OK)
-      fprintf(out, "[run] complete (%d round%s)\n",
-              display->rounds > 0 ? display->rounds : 1,
-              display->rounds == 1 ? "" : "s");
-    break;
-  default:
-    break;
-  }
-  fflush(out);
-}
-
-/* Writes a streamed text delta to stdout while streaming is enabled. */
-static void cli_write_delta(void *userdata, int round, const char *text) {
-  (void)round;
-  CliDisplay *display = userdata;
-  if (!display->stream_to_stdout || text == NULL || text[0] == '\0')
-    return;
-  if (fputs(text, stdout) == EOF)
-    return;
-  fflush(stdout);
-  display->streamed = 1;
-  size_t length = strlen(text);
-  display->streamed_needs_newline = text[length - 1] != '\n';
-}
-
-/* Terminates streamed stdout without reprinting the answer. Returns an exit
- * code. Used after a successful run when deltas were already printed. */
-static int finish_streamed_answer(CliDisplay *display) {
-  if (display->streamed_needs_newline && fputc('\n', stdout) == EOF)
-    return CLI_EXIT_RUNTIME;
-  if (fflush(stdout) == EOF)
-    return CLI_EXIT_RUNTIME;
-  return CLI_EXIT_OK;
 }
 
 /* ------------------------------------------------------------------ */
@@ -657,21 +542,6 @@ static int report_run_error(int status, const AgentError *error,
             "and API availability, or increase --timeout.\n",
             timeout_ms);
   return EXIT_FAILURE;
-}
-
-static int print_answer(const char *text) {
-  if (text == NULL)
-    text = "";
-  if (fputs(text, stdout) == EOF)
-    return EXIT_FAILURE;
-  size_t length = strlen(text);
-  if (length == 0 || text[length - 1] != '\n') {
-    if (fputc('\n', stdout) == EOF)
-      return EXIT_FAILURE;
-  }
-  if (fflush(stdout) == EOF)
-    return EXIT_FAILURE;
-  return EXIT_SUCCESS;
 }
 
 static long monotonic_ms(void) {
@@ -747,56 +617,51 @@ static int print_json_result(int status, const char *output,
   fputs(",\"model\":", out);
   json_write_string(out, opts->model);
   fputs(",\"protocol\":", out);
-  json_write_string(out,
-                    opts->protocol == PROTOCOL_RESPONSES ? "responses"
-                                                         : "chat_completions");
+  json_write_string(out, opts->protocol == PROTOCOL_RESPONSES
+                             ? "responses"
+                             : "chat_completions");
   fprintf(out, ",\"duration_ms\":%ld}\n", duration_ms);
   return fflush(out) == EOF ? CLI_EXIT_RUNTIME : CLI_EXIT_OK;
 }
 
 static int run_once(Agent *agent, Session *session, const CliOptions *opts,
-                    CliDisplay *display) {
+                    Ui *ui) {
   String output = {0};
   AgentError error = {0};
   int exit_code = CLI_EXIT_OK;
 
-  display->streamed = 0;
-  display->streamed_needs_newline = 0;
+  ui_reset_run(ui);
   g_interrupt = 0;
   long started = monotonic_ms();
+  g_run_active = 1;
   int status = agent_run(agent, session, opts->prompt, &output, &error);
+  g_run_active = 0;
   long duration_ms = monotonic_ms() - started;
-  int interrupted = g_interrupt;
+  int cancelled = status == AGENT_ERR_CANCELLED;
   g_interrupt = 0;
 
   if (opts->output_json) {
     const char *message = error.message[0] ? error.message : "Unknown error";
     exit_code = print_json_result(
         status, status == AGENT_OK ? string_c_str(&output) : NULL, message,
-        display->rounds, opts, duration_ms);
+        ui_rounds(ui), opts, duration_ms);
     if (status != AGENT_OK && exit_code == CLI_EXIT_OK)
       exit_code = CLI_EXIT_RUNTIME;
+    if (cancelled)
+      exit_code = CLI_EXIT_INTERRUPTED;
+  } else if (cancelled) {
+    fprintf(stderr, "Cancelled.\n");
+    exit_code = CLI_EXIT_INTERRUPTED;
   } else if (status != AGENT_OK) {
     exit_code = report_run_error(status, &error, opts->timeout_ms);
-  } else if (opts->stream) {
-    if (display->streamed) {
-      exit_code = finish_streamed_answer(display);
-    } else if (print_answer(string_c_str(&output)) != EXIT_SUCCESS) {
+  } else if (opts->stream && ui_streamed(ui)) {
+    if (ui_finish_stream(ui) != 0) {
       fprintf(stderr, "Failed to write output.\n");
       exit_code = CLI_EXIT_RUNTIME;
     }
-  } else if (print_answer(string_c_str(&output)) != EXIT_SUCCESS) {
+  } else if (ui_print_answer(string_c_str(&output)) != 0) {
     fprintf(stderr, "Failed to write output.\n");
     exit_code = CLI_EXIT_RUNTIME;
-  }
-
-  if (interrupted) {
-    if (!opts->output_json)
-      fprintf(stderr,
-              "(interrupt received during the request; that request could not "
-              "be aborted mid-flight)\n");
-    if (exit_code == CLI_EXIT_OK)
-      exit_code = CLI_EXIT_INTERRUPTED;
   }
 
   string_destroy(&output);
@@ -804,13 +669,12 @@ static int run_once(Agent *agent, Session *session, const CliOptions *opts,
 }
 
 static int run_interactive(Agent *agent, Session *session,
-                           const CliOptions *opts, int show_prompt,
-                           CliDisplay *display) {
+                           const CliOptions *opts, int show_prompt, Ui *ui) {
   int exit_code = EXIT_SUCCESS;
   if (show_prompt) {
     fprintf(stderr,
             "TinyAgent %s  model=%s  protocol=%s\n"
-            "Type /help for commands, /exit to quit.\n",
+            "Type /help for commands, /exit to quit. Ctrl-C cancels a run.\n",
             agent_version(), opts->model,
             opts->protocol == PROTOCOL_RESPONSES ? "responses"
                                                  : "chat_completions");
@@ -818,19 +682,13 @@ static int run_interactive(Agent *agent, Session *session,
 
   for (;;) {
     g_interrupt = 0;
-    if (show_prompt) {
-      if (printf("Input: ") < 0 || fflush(stdout) == EOF) {
-        fprintf(stderr, "Failed to write prompt.\n");
-        return EXIT_FAILURE;
-      }
-    }
+    ui_prompt(ui);
 
     char *line = NULL;
     ReadResult read = read_line(stdin, &line);
     if (read == READ_INTERRUPTED) {
-      if (show_prompt)
-        printf("\n");
-      g_interrupt = 0;
+      fputc('\n', stderr);
+      g_interrupt = 0; /* First Ctrl-C at the prompt clears the line. */
       continue;
     }
     if (read == READ_EOF)
@@ -859,23 +717,30 @@ static int run_interactive(Agent *agent, Session *session,
 
     String output = {0};
     AgentError error = {0};
-    display->streamed = 0;
-    display->streamed_needs_newline = 0;
+    ui_reset_run(ui);
+    g_run_active = 1;
     int status = agent_run(agent, session, line, &output, &error);
+    g_run_active = 0;
     free(line);
+    if (status == AGENT_ERR_CANCELLED) {
+      fprintf(stderr, "\n[cancelled]\n");
+      g_interrupt = 0;
+      string_destroy(&output);
+      continue;
+    }
     if (status != AGENT_OK) {
       exit_code = report_run_error(status, &error, opts->timeout_ms);
       string_destroy(&output);
       continue;
     }
-    if (opts->stream && display->streamed) {
-      if (finish_streamed_answer(display) != CLI_EXIT_OK) {
+    if (opts->stream && ui_streamed(ui)) {
+      if (ui_finish_stream(ui) != 0) {
         fprintf(stderr, "Failed to write output.\n");
         exit_code = CLI_EXIT_RUNTIME;
         string_destroy(&output);
         break;
       }
-    } else if (print_answer(string_c_str(&output)) != EXIT_SUCCESS) {
+    } else if (ui_print_answer(string_c_str(&output)) != 0) {
       fprintf(stderr, "Failed to write output.\n");
       exit_code = CLI_EXIT_RUNTIME;
       string_destroy(&output);
@@ -884,6 +749,16 @@ static int run_interactive(Agent *agent, Session *session,
     string_destroy(&output);
   }
   return exit_code;
+}
+
+/* The status line uses ANSI cursor movement, so disable it when the terminal
+ * is dumb or the user opted out with NO_COLOR. */
+static int terminal_supports_status(void) {
+  const char *term = getenv("TERM");
+  if (term == NULL || strcmp(term, "dumb") == 0)
+    return 0;
+  const char *no_color = getenv("NO_COLOR");
+  return no_color == NULL || no_color[0] == '\0';
 }
 
 int main(int argc, char **argv) {
@@ -907,21 +782,36 @@ int main(int argc, char **argv) {
 
   /* Decide where the per-round transcript goes. stdout must stay clean when
    * the answer is meant to be consumed by another program. */
-  CliDisplay display = {0};
+  FILE *transcript = NULL;
   if (opts.prompt != NULL) {
-    display.out = opts.verbose ? stderr : NULL;
+    transcript = opts.verbose ? stderr : NULL;
   } else if (prompt_enabled) {
-    display.out = (opts.quiet || opts.stream) ? NULL : stdout;
+    transcript = (opts.quiet || opts.stream) ? NULL : stdout;
   } else {
-    display.out = opts.verbose ? stderr : NULL;
+    transcript = opts.verbose ? stderr : NULL;
   }
-  display.stream_to_stdout = opts.stream && !opts.output_json;
+
+  /* The live status line lives on stderr, never stdout, and only when stderr
+   * is a real terminal. --json keeps stderr for diagnostics only. */
+  int status_tty =
+      !opts.output_json && isatty(STDERR_FILENO) && terminal_supports_status();
+  UiConfig ui_config = {.transcript = transcript,
+                        .status = status_tty ? stderr : NULL,
+                        .tty = status_tty,
+                        .stream_to_stdout = opts.stream && !opts.output_json,
+                        .cancel_flag = &g_interrupt};
+  Ui *ui = ui_create(&ui_config);
+  if (ui == NULL) {
+    fprintf(stderr, "error: could not initialize the terminal UI\n");
+    return CLI_EXIT_RUNTIME;
+  }
 
   /* Approval only prompts during an interactive TTY session; one-shot and
    * piped runs deny mutating tools unless --yes was passed. */
   CliApproval approval = {.auto_approve = opts.yes,
                           .read_only = opts.read_only,
-                          .interactive = opts.prompt == NULL && prompt_enabled};
+                          .interactive = opts.prompt == NULL && prompt_enabled,
+                          .ui = ui};
 
   Agent *agent = NULL;
   ToolRegistry *registry = NULL;
@@ -930,14 +820,17 @@ int main(int argc, char **argv) {
   AgentError error = {0};
   AgentConfig config = config_default();
   config.max_round = opts.max_round;
-  config.on_event = print_agent_event;
-  config.userdata = &display;
+  config.on_event = ui_on_event;
+  config.userdata = ui;
   config.on_tool_approval = cli_approve;
   config.approval_userdata = &approval;
   config.stream = opts.stream && !opts.output_json;
-  config.on_delta = cli_write_delta;
+  config.on_delta = ui_on_delta;
+  config.is_cancelled = ui_poll;
+  config.cancel_userdata = ui;
   int status = AGENT_OK;
   const char *stage = "provider initialization";
+  int exit_code = EXIT_SUCCESS;
 
   OpenAIConfig provider_config = {
       .common = {.api_key = opts.api_key,
@@ -972,11 +865,10 @@ int main(int argc, char **argv) {
   if (status != AGENT_OK)
     goto done;
 
-  int exit_code = EXIT_SUCCESS;
   if (opts.prompt != NULL) {
-    exit_code = run_once(agent, session, &opts, &display);
+    exit_code = run_once(agent, session, &opts, ui);
   } else {
-    exit_code = run_interactive(agent, session, &opts, prompt_enabled, &display);
+    exit_code = run_interactive(agent, session, &opts, prompt_enabled, ui);
   }
 
 done:
@@ -998,5 +890,6 @@ done:
     fprintf(stderr, "Failed to destroy provider.\n");
     exit_code = EXIT_FAILURE;
   }
+  ui_destroy(ui);
   return exit_code;
 }
