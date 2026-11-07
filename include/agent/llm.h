@@ -38,6 +38,13 @@ typedef struct {
   const Context *context;
   const ToolDefinition *const *tools; // Borrowed for the duration of complete().
   size_t tool_count;
+
+  // When nonzero, providers should request incremental output and invoke
+  // on_delta as text arrives. The final response must still be assembled and
+  // returned normally, so tool calls and history are unaffected.
+  int stream;
+  void (*on_delta)(void *userdata, const char *text); // Borrowed text.
+  void *delta_userdata;
 } LLMRequest;
 
 typedef struct {

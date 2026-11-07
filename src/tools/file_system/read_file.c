@@ -12,7 +12,7 @@ enum { READ_FILE_MAX_BYTES = 1024 * 1024 };
 
 const ToolDefinition read_file_tool = {
     .name = "read_file", .description = READ_FILE_DESCRIPTION,
-    .parameters_json = READ_FILE_PARAMETERS_JSON, .strict = 1, .fn = read_file};
+    .parameters_json = READ_FILE_PARAMETERS_JSON, .strict = 1, .mutating = 0, .fn = read_file};
 
 AgentStatus read_file_register(ToolRegistry *reg, AgentError *error) {
   return tool_registry_register(reg, &read_file_tool, error);

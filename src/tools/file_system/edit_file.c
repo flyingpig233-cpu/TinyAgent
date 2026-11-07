@@ -7,7 +7,7 @@
 
 const ToolDefinition edit_file_tool = {
     .name = "edit_file", .description = EDIT_FILE_DESCRIPTION,
-    .parameters_json = EDIT_FILE_PARAMETERS_JSON, .strict = 1, .fn = edit_file};
+    .parameters_json = EDIT_FILE_PARAMETERS_JSON, .strict = 1, .mutating = 1, .fn = edit_file};
 
 AgentStatus edit_file_register(ToolRegistry *reg, AgentError *error) {
   return tool_registry_register(reg, &edit_file_tool, error);

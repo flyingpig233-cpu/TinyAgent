@@ -3,7 +3,7 @@
 
 const ToolDefinition run_command_tool = {
     .name = "run_command", .description = RUN_COMMAND_DESCRIPTION,
-    .parameters_json = RUN_COMMAND_PARAMETERS_JSON, .strict = 1, .fn = run_command};
+    .parameters_json = RUN_COMMAND_PARAMETERS_JSON, .strict = 1, .mutating = 1, .fn = run_command};
 
 AgentStatus run_command_register(ToolRegistry *reg, AgentError *error) {
   return tool_registry_register(reg, &run_command_tool, error);

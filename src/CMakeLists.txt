@@ -12,6 +12,7 @@ add_library(tiny_agent_core STATIC
     llm/providers/openai_chat.c
     llm/providers/openai_responses.c
     llm/providers/openai_json.c
+    llm/providers/openai_stream.c
     tools/tool.c
     tools/file_system/list_dir.c
     tools/file_system/read_file.c

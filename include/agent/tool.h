@@ -16,7 +16,8 @@ typedef struct {
 // If it supplies an output, it transfers ownership of the malloc-allocated
 // output and content to the caller, including when returning an error.
 // On success, output and content must be non-NULL. The content is sent to the
-// model for either is_error value; a non-OK return aborts the agent run.
+// model for either is_error value. Non-OK returns are reported to the model
+// as tool errors so it can retry.
 typedef AgentStatus (*ToolExecutionFn) (
   ToolContext *ctx,
   const cJSON *arguments,
@@ -38,6 +39,10 @@ typedef struct {
   const char *description; // Optional.
   const char *parameters_json;
   int strict; // 0 or 1.
+
+  // 1 when the tool can change external state (files, processes, network).
+  // Hosts may require approval before running mutating tools. 0 or 1.
+  int mutating;
 
   ToolExecutionFn fn;
 } ToolDefinition;

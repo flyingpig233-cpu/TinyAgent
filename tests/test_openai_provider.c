@@ -24,6 +24,16 @@ int main(void) {
       provider != NULL)
     return 4;
   invalid = config;
+  invalid.common.timeout_ms = -1;
+  if (openai_provider_init(&provider, &invalid) != AGENT_ERR_INVAILD_ARGUMENT ||
+      provider != NULL)
+    return 15;
+  invalid = config;
+  invalid.common.connect_timeout_ms = -1;
+  if (openai_provider_init(&provider, &invalid) != AGENT_ERR_INVAILD_ARGUMENT ||
+      provider != NULL)
+    return 16;
+  invalid = config;
   invalid.protocol = (OpenAIProtocol)99;
   if (openai_provider_init(&provider, &invalid) != AGENT_ERR_INVAILD_ARGUMENT ||
       provider != NULL)

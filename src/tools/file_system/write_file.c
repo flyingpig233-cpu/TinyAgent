@@ -5,7 +5,7 @@
 
 const ToolDefinition write_file_tool = {
     .name = "write_file", .description = WRITE_FILE_DESCRIPTION,
-    .parameters_json = WRITE_FILE_PARAMETERS_JSON, .strict = 1, .fn = write_file};
+    .parameters_json = WRITE_FILE_PARAMETERS_JSON, .strict = 1, .mutating = 1, .fn = write_file};
 
 AgentStatus write_file_register(ToolRegistry *reg, AgentError *error) {
   return tool_registry_register(reg, &write_file_tool, error);

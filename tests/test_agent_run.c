@@ -62,6 +62,40 @@ static int exercise_tool_call(void) {
   return 0;
 }
 
+static int exercise_retries(int exhausted) {
+  ToolCall calls[] = {{"bad", "missing", "{}"},
+                      {"retry", "test", "{\"value\":42}"}};
+  LLMResponse responses[] = {
+      {.finish_reason = LLM_FINISH_TOOL_CALLS, .tool_calls = &calls[0], .tool_call_count = 1},
+      {.finish_reason = LLM_FINISH_TOOL_CALLS, .tool_calls = exhausted ? &calls[0] : &calls[1], .tool_call_count = 1},
+      {.finish_reason = LLM_FINISH_STOP, .content = "done"}};
+  ToolDefinition tool = {.name = "test", .parameters_json = "{}", .fn = execute_tool};
+  const ToolDefinition *tools[] = {&tool};
+  ToolRegistry registry = {.tools = tools, .count = 1, .capacity = 1};
+  LLMProvider provider = {0};
+  Context context = {0};
+  Session session = {.context = &context};
+  AgentConfig config = {.max_round = 3, .max_tool_retries = 1};
+  Agent *agent = NULL;
+  String output = {0};
+  AgentError error = {0};
+  CHECK(context_init(&context) == AGENT_OK);
+  CHECK(mock_llm_init(&provider, responses, 3) == AGENT_OK);
+  CHECK(agent_create(&config, &provider, &registry, &agent) == AGENT_OK);
+  CHECK(agent_run(agent, &session, "question", &output, &error) ==
+        (exhausted ? AGENT_ERR_TOOL_RETRIES : AGENT_OK));
+  CHECK(context.array->count == (size_t)(exhausted ? 5 : 6));
+  CHECK(strstr(context.array->items[2].content, "not registered") != NULL);
+  CHECK(strcmp(context.array->items[2].tool_call_id, "bad") == 0);
+  if (!exhausted)
+    CHECK(strcmp(string_c_str(&output), "done") == 0);
+  agent_destroy(agent);
+  CHECK(llm_provider_destory(&provider, NULL) == AGENT_OK);
+  CHECK(context_destory(&context) == AGENT_OK);
+  string_destroy(&output);
+  return 0;
+}
+
 static int exercise(LLMFinishReason reason, const char *content, int expected) {
   LLMResponse fixture = {.content = (char *)content, .finish_reason = reason};
   LLMProvider provider = {0};
@@ -93,6 +127,8 @@ static int exercise(LLMFinishReason reason, const char *content, int expected) {
 
 int main(void) {
   CHECK(exercise_tool_call() == 0);
+  CHECK(exercise_retries(0) == 0);
+  CHECK(exercise_retries(1) == 0);
   CHECK(exercise(LLM_FINISH_STOP, "answer", AGENT_OK) == 0);
   CHECK(exercise(LLM_FINISH_STOP, NULL, AGENT_OK) == 0);
   CHECK(exercise(LLM_FINISH_LENGTH, "partial", AGENT_ERR_LLM_TRUNCATED) == 0);

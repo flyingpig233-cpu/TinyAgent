@@ -3,6 +3,7 @@ import json
 import subprocess
 import sys
 import threading
+import time
 
 
 REASONING = {'type': 'reasoning', 'id': 'rs_1', 'summary': [],
@@ -23,6 +24,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = self.rfile.read(int(self.headers['Content-Length']))
+        if self.path.startswith('/slow/'):
+            time.sleep(0.2)
         try:
             request = json.loads(body)
             assert self.headers.get('Authorization') == 'Bearer secret'
@@ -99,7 +102,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     @staticmethod
     def text_reply(responses, text):

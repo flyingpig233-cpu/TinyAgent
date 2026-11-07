@@ -36,6 +36,8 @@ int openai_chat_encode_request(const LLMRequest *request, const char *model,
     return status;
   if (cJSON_AddStringToObject(root, "model", model) == NULL)
     goto done;
+  if (request->stream && cJSON_AddBoolToObject(root, "stream", 1) == NULL)
+    goto done;
   cJSON *array = cJSON_AddArrayToObject(root, "messages");
   if (array == NULL)
     goto done;

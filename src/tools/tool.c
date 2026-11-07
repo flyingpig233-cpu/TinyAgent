@@ -32,7 +32,8 @@ int tool_registry_register(ToolRegistry *reg, const ToolDefinition *tool_def, Ag
   }
   if (tool_def->name == NULL || tool_def->name[0] == '\0' ||
       tool_def->parameters_json == NULL || tool_def->fn == NULL ||
-      (tool_def->strict != 0 && tool_def->strict != 1)) {
+      (tool_def->strict != 0 && tool_def->strict != 1) ||
+      (tool_def->mutating != 0 && tool_def->mutating != 1)) {
     ERROR(error, "Invalid tool definition");
     return AGENT_ERR_INVAILD_ARGUMENT;
   }

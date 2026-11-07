@@ -4,7 +4,7 @@
 
 const ToolDefinition search_tool = {
     .name = "search", .description = SEARCH_DESCRIPTION,
-    .parameters_json = SEARCH_PARAMETERS_JSON, .strict = 1, .fn = search};
+    .parameters_json = SEARCH_PARAMETERS_JSON, .strict = 1, .mutating = 0, .fn = search};
 
 AgentStatus search_register(ToolRegistry *reg, AgentError *error) {
   return tool_registry_register(reg, &search_tool, error);

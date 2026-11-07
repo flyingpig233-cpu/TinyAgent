@@ -47,7 +47,8 @@ int openai_provider_init(LLMProvider **provider, const OpenAIConfig *config) {
       config->common.base_url == NULL || config->common.model == NULL)
     return AGENT_ERR_NULL_POINTER;
   if (config->common.api_key[0] == '\0' || config->common.base_url[0] == '\0' ||
-      config->common.model[0] == '\0')
+      config->common.model[0] == '\0' || config->common.connect_timeout_ms < 0 ||
+      config->common.timeout_ms < 0)
     return AGENT_ERR_INVAILD_ARGUMENT;
 
   if ((config->protocol != PROTOCOL_CHAT_COMPLETIONS &&
@@ -65,6 +66,8 @@ int openai_provider_init(LLMProvider **provider, const OpenAIConfig *config) {
   }
 
   ctx->config.protocol = config->protocol;
+  ctx->config.common.connect_timeout_ms = config->common.connect_timeout_ms;
+  ctx->config.common.timeout_ms = config->common.timeout_ms;
   char *copy = NULL;
   int status = full_copy(&copy, config->common.api_key);
   if (status != AGENT_OK)
@@ -154,7 +157,15 @@ int openai_provider_complete(OpenAIProvider *provider,
                               .headers = headers,
                               .header_count = 2,
                               .body = req_json,
-                              .body_len = strlen(req_json)};
+                              .body_len = strlen(req_json),
+                              .connect_timeout_ms = provider->config.common.connect_timeout_ms,
+                              .timeout_ms = provider->config.common.timeout_ms};
+  if (request->stream) {
+    status = openai_stream_complete(
+        provider->client, &http_request, provider->config.protocol,
+        request->on_delta, request->delta_userdata, out, error);
+    goto done;
+  }
   status =
       http_client_request(provider->client, &http_request, &response, error);
   if (status != AGENT_OK)

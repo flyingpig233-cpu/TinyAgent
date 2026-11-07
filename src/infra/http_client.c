@@ -10,34 +10,44 @@ struct HttpClient {
   CURL *handle;
 };
 
+/* A response body either collected into an HttpResponse and/or forwarded to a
+ * caller-supplied write callback. Exactly one of collect/write is normally set. */
 typedef struct {
-  HttpResponse response;
+  HttpResponse *collect;
+  HttpWriteFn write;
+  void *userdata;
   int failed;
-} ResponseBuffer;
+} BodySink;
 
-static size_t receive_body(char *data, size_t size, size_t count,
-                           void *user_data) {
-  ResponseBuffer *buffer = user_data;
+static size_t sink_write(char *data, size_t size, size_t count,
+                         void *user_data) {
+  BodySink *sink = user_data;
   if (size != 0 && count > SIZE_MAX / size) {
-    buffer->failed = 1;
+    sink->failed = 1;
     return 0;
   }
   size_t bytes = size * count;
-  if (bytes > SIZE_MAX - 1 - buffer->response.body_len) {
-    buffer->failed = 1;
+  if (sink->collect != NULL) {
+    if (bytes > SIZE_MAX - 1 - sink->collect->body_len) {
+      sink->failed = 1;
+      return 0;
+    }
+    size_t length = sink->collect->body_len + bytes;
+    char *body = realloc(sink->collect->body, length + 1);
+    if (body == NULL) {
+      sink->failed = 1;
+      return 0;
+    }
+    if (bytes != 0)
+      memcpy(body + sink->collect->body_len, data, bytes);
+    body[length] = '\0';
+    sink->collect->body = body;
+    sink->collect->body_len = length;
+  }
+  if (sink->write != NULL && sink->write(sink->userdata, data, bytes) != bytes) {
+    sink->failed = 1;
     return 0;
   }
-  size_t length = buffer->response.body_len + bytes;
-  char *body = realloc(buffer->response.body, length + 1);
-  if (body == NULL) {
-    buffer->failed = 1;
-    return 0;
-  }
-  if (bytes != 0)
-    memcpy(body + buffer->response.body_len, data, bytes);
-  body[length] = '\0';
-  buffer->response.body = body;
-  buffer->response.body_len = length;
   return bytes;
 }
 
@@ -62,11 +72,13 @@ int http_client_init(HttpClient **client) {
   return AGENT_OK;
 }
 
-int http_client_request(HttpClient *client, const HttpRequest *request,
-                        HttpResponse *response, AgentError *error) {
+/* Performs one request. The body is delivered to sink; on a successful
+ * transfer *status_code receives the HTTP status (which may be an error code). */
+static int perform(HttpClient *client, const HttpRequest *request,
+                   BodySink *sink, long *status_code, AgentError *error) {
   agent_error_clear(error);
-  if (client == NULL || request == NULL || response == NULL ||
-      request->url == NULL) {
+  if (client == NULL || request == NULL || request->url == NULL ||
+      sink == NULL) {
     ERROR(error, "HTTP client, request, URL and response are required");
     return AGENT_ERR_NULL_POINTER;
   }
@@ -82,7 +94,6 @@ int http_client_request(HttpClient *client, const HttpRequest *request,
     return AGENT_ERR_INVAILD_ARGUMENT;
   }
   struct curl_slist *headers = NULL;
-  ResponseBuffer buffer = {0};
   CURLcode result = CURLE_OK;
   int status = AGENT_OK;
   char curl_error[CURL_ERROR_SIZE] = {0};
@@ -114,8 +125,8 @@ int http_client_request(HttpClient *client, const HttpRequest *request,
          request->connect_timeout_ms ? request->connect_timeout_ms : 10000L);
   SETOPT(CURLOPT_TIMEOUT_MS,
          request->timeout_ms ? request->timeout_ms : 60000L);
-  SETOPT(CURLOPT_WRITEFUNCTION, receive_body);
-  SETOPT(CURLOPT_WRITEDATA, &buffer);
+  SETOPT(CURLOPT_WRITEFUNCTION, sink_write);
+  SETOPT(CURLOPT_WRITEDATA, sink);
   SETOPT(CURLOPT_HTTPHEADER, headers);
   if (request->body != NULL) {
     SETOPT(CURLOPT_POSTFIELDS, request->body);
@@ -127,35 +138,63 @@ int http_client_request(HttpClient *client, const HttpRequest *request,
   result = curl_easy_perform(client->handle);
   if (result != CURLE_OK)
     goto curl_failed;
-  result = curl_easy_getinfo(client->handle, CURLINFO_RESPONSE_CODE,
-                             &buffer.response.status_code);
-  if (result != CURLE_OK)
-    goto curl_failed;
-  if (buffer.response.body == NULL) {
-    buffer.response.body = calloc(1, 1);
-    if (buffer.response.body == NULL) {
-      ERROR(error, "Could not allocate HTTP response");
-      status = AGENT_ERR_OUT_OF_MEMORY;
-      goto done;
-    }
+  if (status_code != NULL) {
+    result = curl_easy_getinfo(client->handle, CURLINFO_RESPONSE_CODE,
+                               status_code);
+    if (result != CURLE_OK)
+      goto curl_failed;
   }
-  http_response_free(response);
-  *response = buffer.response;
-  buffer.response = (HttpResponse){0};
   goto done;
 
 curl_failed:
-  status = buffer.failed                        ? AGENT_ERR_OUT_OF_MEMORY
+  status = sink->failed                        ? AGENT_ERR_OUT_OF_MEMORY
            : result == CURLE_OPERATION_TIMEDOUT ? AGENT_ERR_HTTP_TIMEOUT
                                                 : AGENT_ERR_HTTP;
-  ERROR(error, buffer.failed   ? "Could not allocate HTTP response"
+  ERROR(error, sink->failed   ? "Could not allocate HTTP response"
                : curl_error[0] ? curl_error
                                : curl_easy_strerror(result));
 done:
   curl_slist_free_all(headers);
-  http_response_free(&buffer.response);
   return status;
 #undef SETOPT
+}
+
+int http_client_request(HttpClient *client, const HttpRequest *request,
+                        HttpResponse *response, AgentError *error) {
+  if (response == NULL)
+    return AGENT_ERR_NULL_POINTER;
+  HttpResponse buffer = {0};
+  BodySink sink = {.collect = &buffer};
+  long status_code = 0;
+  int status = perform(client, request, &sink, &status_code, error);
+  if (status != AGENT_OK) {
+    http_response_free(&buffer);
+    return status;
+  }
+  if (buffer.body == NULL) {
+    buffer.body = calloc(1, 1);
+    if (buffer.body == NULL) {
+      ERROR(error, "Could not allocate HTTP response");
+      return AGENT_ERR_OUT_OF_MEMORY;
+    }
+  }
+  buffer.status_code = status_code;
+  http_response_free(response);
+  *response = buffer;
+  return AGENT_OK;
+}
+
+int http_client_request_stream(HttpClient *client, const HttpRequest *request,
+                               HttpWriteFn write, void *userdata,
+                               long *status_code, AgentError *error) {
+  if (write == NULL)
+    return AGENT_ERR_NULL_POINTER;
+  BodySink sink = {.write = write, .userdata = userdata};
+  long code = 0;
+  int status = perform(client, request, &sink, &code, error);
+  if (status == AGENT_OK && status_code != NULL)
+    *status_code = code;
+  return status;
 }
 
 int http_client_post(HttpClient *client, const char *url, const char *json,

@@ -16,7 +16,7 @@ ctest --test-dir build --output-on-failure
 
 ## OpenAI protocols
 
-One provider supports non-streaming Chat Completions and Responses:
+One provider supports Chat Completions and Responses (streaming optional):
 
 ```c
 OpenAIConfig config = {
@@ -47,6 +47,70 @@ above. Select a model and server that support the chosen protocol.
 export DEEPSEEK_API_KEY='your-key'
 ./build/app/tiny-agent
 ```
+
+The CLI allows 180 seconds for each model request. Override it
+with `DEEPSEEK_TIMEOUT_MS`, a positive integer in milliseconds:
+
+```sh
+DEEPSEEK_TIMEOUT_MS=300000 ./build/app/tiny-agent
+```
+
+### Tool approval
+
+`write_file`, `edit_file` and `run_command` are marked mutating; `list_dir`,
+`read_file` and `search` are read-only. In an interactive TTY session the CLI
+prompts before each mutating call (`y` allow, `n` deny, `a` allow all for the
+rest of the session). Read-only tools never prompt. A one-shot `-p/--print` run
+or a piped stdin has no one to answer the prompt, so mutating tools are denied
+unless you pass `--yes`; `--read-only` always denies them, and `--yes` combined
+with `--read-only` is rejected as a usage error.
+
+Hosts embedding the library set `AgentConfig.on_tool_approval` to receive every
+call with the tool's `ToolDefinition.mutating` flag and return
+`TOOL_DECISION_ALLOW`, `TOOL_DECISION_DENY`, or `TOOL_DECISION_ALLOW_ALL` (which
+sticks for the rest of the session). A NULL callback allows everything. A
+denied call becomes a tool error result, so the model can inspect it and adapt
+rather than aborting the run.
+
+### Machine-readable output
+
+Pass `--json` (or `--output-format json`) with a prompt to get a single JSON
+object on stdout instead of plain text:
+
+```json
+{"status":"ok","output":"There are 2 files.","error":null,"error_code":null,
+ "rounds":1,"model":"deepseek-flash","protocol":"responses","duration_ms":812}
+```
+
+On failure `status` is `"error"`, `output` is `null`, and `error` / `error_code`
+carry the message and the numeric `AgentStatus`. The per-round transcript, when
+enabled with `-v`, still goes to stderr, so stdout parses cleanly. `--json`
+requires a prompt (`-p` or positional).
+
+Exit codes: `0` success, `1` runtime error, `2` usage or configuration error,
+and `130` when a run is interrupted with Ctrl-C.
+
+### Streaming output
+
+Pass `--stream` to print assistant text as it is generated. Both protocols are
+supported; the final response is still fully assembled, so tool calls, history
+and continuation items behave exactly as in the non-streaming path. Deltas go to
+stdout, while an optional `-v` transcript stays on stderr. `--json` takes
+precedence: when both are set, output is a single JSON object and nothing is
+streamed.
+
+Library callers set `AgentConfig.stream = 1` and an `on_delta` callback
+(`void (*)(void *userdata, int round, const char *text)`). Providers receive the
+same request through `LLMRequest.stream` / `LLMRequest.on_delta`; a provider that
+does not support streaming may ignore these fields and return a complete
+response in one piece.
+
+`ProviderConfig.connect_timeout_ms` and `ProviderConfig.timeout_ms` configure
+connection and total request deadlines for C callers. Zero preserves the HTTP
+defaults of 10 seconds to connect and 60 seconds total; negative values are
+rejected. A timeout with zero bytes received means no response body arrived
+before the deadline; it can result from network/proxy issues, queueing or slow
+generation. Increasing the timeout alone cannot diagnose the underlying cause.
 
 ### History and results
 
@@ -79,9 +143,69 @@ from the `call_id` used to associate results. Then call the provider again with
 the updated context and tool definitions.
 
 `agent_run()` advertises registered tools, executes calls in order, appends their
-results, and continues until a final response or `max_round` is reached. Hosted
-tools, multimodal content, streaming, and server-managed conversation IDs are not implemented. Unsupported
+results, and continues until a final response or `max_round` is reached. Tool
+errors are returned to the model so it can correct and retry the call.
+`max_tool_retries` limits retries after consecutive failed tool rounds (default
+3 when zero); a successful tool round resets the count. `max_round` still
+limits all model requests. Hosted
+tools, multimodal content, and server-managed conversation IDs are not implemented. Unsupported
 Responses output item types produce an explicit error.
+
+### Progress events
+
+Set `AgentConfig.on_event` (and an optional `userdata`) to observe a run without
+changing its behavior:
+
+```c
+static void on_event(void *userdata, const AgentEvent *event) {
+  (void)userdata;
+  switch (event->type) {
+  case AGENT_EVENT_LLM_RESPONSE:
+    if (event->content != NULL) printf("assistant: %s\n", event->content);
+    break;
+  case AGENT_EVENT_TOOL_CALL:
+    printf("call %s(%s)\n", event->tool_name, event->arguments_json);
+    break;
+  case AGENT_EVENT_TOOL_RESULT:
+    printf("result %s: %s\n", event->tool_name,
+           event->tool_output ? event->tool_output : "(none)");
+    break;
+  default:
+    break;
+  }
+}
+
+AgentConfig config = config_default();
+config.on_event = on_event;
+```
+
+Events fire synchronously in this order: `AGENT_EVENT_RUN_START`, then per round
+`AGENT_EVENT_LLM_RESPONSE` and, when the model requests tools,
+`AGENT_EVENT_TOOL_CALL` / `AGENT_EVENT_TOOL_RESULT`, and finally
+`AGENT_EVENT_RUN_END`. `round` is 1-based for response and tool events. All
+string fields are borrowed and only valid for the duration of the callback, so
+copy anything that must outlive it. `AGENT_EVENT_RUN_END` carries the final
+status, the output on success, and the error message on failure. The CLI in
+`app/main.c` uses this callback to print a per-round transcript of model
+responses and tool activity:
+
+```text
+Input: list the files
+
+=== agent run ===
+
+--- round 1 ---
+[round 1] model: tool_calls (1 tool call)
+[round 1] assistant: I'll check the directory.
+[round 1] -> list_dir({"path":"."})
+[round 1] <- list_dir ok
+    {"entries":["a.c","b.h"]}
+
+--- round 2 ---
+[round 2] model: stop
+[run] complete (2 rounds)
+Output: There are two files.
+```
 
 ### Built-in coding tools
 

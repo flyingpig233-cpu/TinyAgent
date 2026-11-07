@@ -27,6 +27,17 @@ typedef struct {
 // initialization must be paired with http_client_destroy.
 int http_client_init(HttpClient **client);
 
+// Receives a chunk of the response body as it arrives. Return the number of
+// bytes accepted; returning a value other than len aborts the transfer.
+typedef size_t (*HttpWriteFn)(void *userdata, const char *data, size_t len);
+
+// Like http_client_request, but streams the body to write() instead of
+// collecting it. status_code receives the final HTTP status on success.
+// HTTP error status codes are still successful transfers. error may be NULL.
+int http_client_request_stream(HttpClient *client, const HttpRequest *request,
+                               HttpWriteFn write, void *userdata,
+                               long *status_code, AgentError *error);
+
 // response must be initialized to {0} or contain a previous response. On
 // success it is replaced; on failure it is unchanged. HTTP error status codes
 // are successful transfers and are returned in response->status_code.

@@ -15,6 +15,7 @@ const ToolDefinition list_dir_tool = {
     .description = LIST_DIR_DESCRIPTION,
     .parameters_json = LIST_DIR_PARAMETERS_JSON,
     .strict = 1,
+    .mutating = 0,
     .fn = list_dir,
 };
 

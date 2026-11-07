@@ -80,6 +80,34 @@ static int test_sessions(const char *base, OpenAIProtocol protocol) {
   return 0;
 }
 
+static int test_timeout(const char *base, OpenAIProtocol protocol) {
+  char url[256];
+  snprintf(url, sizeof(url), "%s/slow", base);
+  OpenAIConfig config = {
+      .common = {.api_key = "secret", .base_url = url, .model = "test-model",
+                 .connect_timeout_ms = 1000, .timeout_ms = 50},
+      .protocol = protocol};
+  LLMProvider *provider = NULL;
+  CHECK(openai_provider_init(&provider, &config) == AGENT_OK);
+  config.common.timeout_ms = 1000; // The provider retains its original timeout.
+  Message message = {.role = USER_MESSAGE, .content = "hello"};
+  MessageArrary array = {.items = &message, .count = 1, .capacity = 1};
+  Context context = {.array = &array};
+  LLMRequest request = {.context = &context};
+  LLMResponse *response = NULL;
+  AgentError error = {0};
+  CHECK(llm_provider_complete(provider, &request, &response, &error) == AGENT_ERR_HTTP_TIMEOUT);
+  CHECK(response == NULL && error.message[0] != '\0');
+  CHECK(openai_provider_destory(provider) == AGENT_OK);
+  config.common.timeout_ms = 1000;
+  CHECK(openai_provider_init(&provider, &config) == AGENT_OK);
+  CHECK(llm_provider_complete(provider, &request, &response, &error) == AGENT_OK);
+  CHECK(response != NULL && !strcmp(response->content, "hello back"));
+  llm_response_destroy(response);
+  CHECK(openai_provider_destory(provider) == AGENT_OK);
+  return 0;
+}
+
 int main(int argc, char **argv) {
   CHECK(argc == 2);
   char url[256];
@@ -140,6 +168,7 @@ int main(int argc, char **argv) {
     }
     CHECK(test_tools(argv[1], protocol) == 0);
     CHECK(test_sessions(argv[1], protocol) == 0);
+    CHECK(test_timeout(argv[1], protocol) == 0);
   }
   OpenAIConfig config = {.common = {.api_key = "secret\r\nX-Bad: value",
                                     .base_url = argv[1],

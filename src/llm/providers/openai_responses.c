@@ -97,6 +97,8 @@ int openai_responses_encode_request(const LLMRequest *request,
   if (cJSON_AddStringToObject(root, "model", model) == NULL ||
       cJSON_AddBoolToObject(root, "store", 0) == NULL)
     goto done;
+  if (request->stream && cJSON_AddBoolToObject(root, "stream", 1) == NULL)
+    goto done;
   cJSON *include = cJSON_AddArrayToObject(root, "include");
   cJSON *encrypted = cJSON_CreateString("reasoning.encrypted_content");
   if (include == NULL || encrypted == NULL ||
