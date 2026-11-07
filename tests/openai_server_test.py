@@ -1,5 +1,6 @@
 import http.server
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -87,6 +88,44 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_error(400, str(exc))
             return
 
+        if self.path.startswith('/stream_'):
+            kind = self.path.split('/')[1]
+            if kind == 'stream_invalid':
+                body = b'data: {not json}\n\n'
+            else:
+                call = {'index': 0, 'id': 'call_1', 'type': 'function',
+                        'function': {'name': 'weather', 'arguments': '{}'}}
+                indexes = {'stream_gap': 64, 'stream_fractional': 0.5,
+                           'stream_negative': -1}
+                if kind in indexes:
+                    call['index'] = indexes[kind]
+                elif kind == 'stream_missing':
+                    del call['index']
+                calls = [call]
+                if kind == 'stream_valid':
+                    call['function']['arguments'] = '{'
+                    calls.append({'index': 1, 'id': 'call_2',
+                                  'type': 'function',
+                                  'function': {'name': 'weather',
+                                               'arguments': '{}'}})
+                events = [{'choices': [{'delta': {'tool_calls': calls},
+                                        'finish_reason': None}]}]
+                if kind == 'stream_valid':
+                    events.append({'choices': [{'delta': {'tool_calls': [
+                        {'index': 0, 'function': {'arguments': '}'}}]},
+                        'finish_reason': None}]})
+                events.append({'choices': [{'delta': {},
+                                            'finish_reason': 'tool_calls'}]})
+                body = ''.join(f'data: {json.dumps(event)}\n\n'
+                               for event in events).encode()
+                body += b'data: [DONE]\n\n'
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/event-stream')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         status = 200
         body = json.dumps(reply).encode()
         if self.path.startswith('/http_error/'):
@@ -113,6 +152,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return {'status': 'completed', 'output': [REASONING, response_message(text)]}
         return {'choices': [{'message': {'content': text}, 'finish_reason': 'stop'}]}
 
+
+# Keep local fake-server requests off any inherited HTTP proxy.
+os.environ.update(NO_PROXY='127.0.0.1,localhost',
+                  no_proxy='127.0.0.1,localhost')
 
 server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
 thread = threading.Thread(target=server.serve_forever, daemon=True)

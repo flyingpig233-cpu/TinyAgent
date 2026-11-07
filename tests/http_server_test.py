@@ -1,4 +1,5 @@
 import http.server
+import os
 import subprocess
 import sys
 import threading
@@ -36,6 +37,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(204)
         self.end_headers()
 
+
+# Keep local fake-server requests off any inherited HTTP proxy.
+os.environ.update(NO_PROXY='127.0.0.1,localhost',
+                  no_proxy='127.0.0.1,localhost')
 
 server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
 thread = threading.Thread(target=server.serve_forever, daemon=True)

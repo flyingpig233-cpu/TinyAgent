@@ -14,6 +14,9 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+The local fake-server drivers bypass inherited proxies for loopback hosts in
+their own process environment; production requests still honor proxy settings.
+
 ## OpenAI protocols
 
 One provider supports Chat Completions and Responses (streaming optional):
@@ -105,12 +108,20 @@ same request through `LLMRequest.stream` / `LLMRequest.on_delta`; a provider tha
 does not support streaming may ignore these fields and return a complete
 response in one piece.
 
+Malformed stream JSON and invalid Chat Completions tool-call indexes return
+`AGENT_ERR_LLM_RESPONSE`. New tool-call indexes must be contiguous from zero;
+later deltas may revisit any existing index.
+
 `ProviderConfig.connect_timeout_ms` and `ProviderConfig.timeout_ms` configure
 connection and total request deadlines for C callers. Zero preserves the HTTP
 defaults of 10 seconds to connect and 60 seconds total; negative values are
 rejected. A timeout with zero bytes received means no response body arrived
 before the deadline; it can result from network/proxy issues, queueing or slow
 generation. Increasing the timeout alone cannot diagnose the underlying cause.
+
+Collected HTTP bodies use geometrically grown buffers rather than reallocating
+for every received chunk. Binary payloads retain their exact `body_len` and a
+separate trailing NUL terminator.
 
 ### History and results
 
@@ -207,6 +218,46 @@ Input: list the files
 Output: There are two files.
 ```
 
+### Cancellation
+
+Runs are cooperatively cancellable. In the CLI, Ctrl-C during a request or a
+tool call aborts the in-flight work and returns to the prompt (interactive) or
+exits `130` (one-shot); Ctrl-C at the prompt just clears the line. Cancelled
+`--json` runs still emit one JSON object, with `status: "error"` and
+`error_code: 14` (`AGENT_ERR_CANCELLED`).
+
+Hosts opt in through the same poll hook at three layers:
+
+- `AgentConfig.is_cancelled` / `cancel_userdata` is polled before each round,
+  before each tool call, and periodically while a provider request or tool
+  subprocess is running. A nonzero return aborts with `AGENT_ERR_CANCELLED`.
+- `LLMRequest.is_cancelled` / `cancel_userdata` reaches providers directly.
+  The OpenAI provider maps it onto libcurl's transfer-info callback.
+- `HttpRequest.on_progress` / `progress_userdata` is a raw libcurl hook: it is
+  called roughly every 100 ms, and a nonzero return aborts the transfer. It
+  can also be used to pump progress UI.
+
+`ToolContext.is_cancelled` is passed to every tool callback, so long-running
+`run_command` and `search` invocations kill their process group promptly
+instead of waiting for their timeout.
+
+When a tool round is cancelled, completed tool results are retained and every
+remaining call receives an error result without being executed. This preserves
+valid conversation history so the same session can accept the next prompt.
+
+The hooks are only as fast as the polling: a blocked system call cannot be
+interrupted mid-flight, but libcurl and the tool process loop both poll every
+~100 ms or less.
+
+### Terminal UI
+
+The CLI renders through a single writer. Prompt and the live status line
+(`thinking  1.2s (round 2)`) go to stderr, answers and streamed text go to
+stdout, and the per-round transcript stays on its documented sink. The status
+line uses ANSI cursor movement, so it is disabled when stderr is not a TTY or
+`TERM=dumb` or `NO_COLOR` is set; `--json` never draws it. Piped and `--print`
+runs therefore keep stdout byte-clean.
+
 ### Built-in coding tools
 
 The CLI registers the following tools. Relative paths use the application's
@@ -221,6 +272,10 @@ borrowed `ToolDefinition`, callback and registration helper.
 | `write_file` | `path`, `content`, `mode`: `create` or `overwrite` | JSON path, mode and bytes written |
 | `edit_file` | `path`, `old_text`, `new_text` | JSON path, replacement count and bytes written |
 | `run_command` | `command`, nullable `cwd`, `timeout_ms`, `max_output_bytes` | JSON stdout, stderr, exit code, signal and truncation/timeout flags |
+
+`list_dir` requires UTF-8 entry names. If any name contains invalid bytes, it
+returns an argument error with no partial listing, rather than renaming the
+entry or placing invalid UTF-8 in the next provider request.
 
 `search` runs ripgrep directly without shell interpolation. It supports regex
 and literal matching, honors ignore files, and skips hidden files and symlinks

@@ -6,6 +6,7 @@ against it, and inspects stdout/exit status. No API key or network is needed.
 
 import http.server
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -49,6 +50,9 @@ def run(binary, args):
 
 
 def main():
+    # Keep local fake-server requests off any inherited HTTP proxy.
+    os.environ.update(NO_PROXY='127.0.0.1,localhost',
+                      no_proxy='127.0.0.1,localhost')
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

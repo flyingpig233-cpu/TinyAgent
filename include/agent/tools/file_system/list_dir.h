@@ -12,6 +12,7 @@
 // entries (excluding . and ..), including hidden entries. Each entry contains
 // name, type, size in bytes, mode and modification time in Unix seconds.
 // Symbolic links are described without following them. Order is unspecified.
+// Non-UTF-8 entry names fail with AGENT_ERR_INVAILD_ARGUMENT and no output.
 extern const ToolDefinition list_dir_tool;
 
 AgentStatus list_dir(ToolContext *ctx, const cJSON *arguments,

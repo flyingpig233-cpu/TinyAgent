@@ -44,8 +44,6 @@ typedef struct {
 } ChatAccum;
 
 static ChatCall *chat_slot(ChatAccum *accum, long index) {
-  if (index < 0)
-    index = (long)accum->count;
   if ((size_t)index >= accum->capacity) {
     size_t capacity = accum->capacity ? accum->capacity : 4;
     while (capacity <= (size_t)index) {
@@ -105,7 +103,13 @@ static int chat_feed(void *impl, const char *payload) {
         cJSON *call = NULL;
         cJSON_ArrayForEach(call, calls) {
           cJSON *index = cJSON_GetObjectItemCaseSensitive(call, "index");
-          long slot_index = cJSON_IsNumber(index) ? (long)index->valueint : -1;
+          if (!cJSON_IsNumber(index) || index->valueint < 0 ||
+              index->valuedouble != (double)index->valueint ||
+              (size_t)index->valueint > accum->count) {
+            status = AGENT_ERR_LLM_RESPONSE;
+            break;
+          }
+          long slot_index = index->valueint;
           ChatCall *slot = chat_slot(accum, slot_index);
           if (slot == NULL) {
             status = AGENT_ERR_OUT_OF_MEMORY;
@@ -403,8 +407,12 @@ int openai_stream_complete(HttpClient *client, const HttpRequest *http_request,
   int status = http_client_request_stream(client, http_request, stream_write,
                                           &state, &status_code, error);
   if (status != AGENT_OK) {
-    if (state.status != AGENT_OK)
+    if (state.status != AGENT_OK) {
       status = state.status;
+      ERROR(error, status == AGENT_ERR_OUT_OF_MEMORY
+                       ? "Could not allocate OpenAI stream"
+                       : "Could not parse OpenAI stream");
+    }
     goto done;
   }
   if (state.line.length != 0) {

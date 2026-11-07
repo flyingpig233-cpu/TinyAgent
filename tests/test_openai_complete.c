@@ -108,6 +108,44 @@ static int test_timeout(const char *base, OpenAIProtocol protocol) {
   return 0;
 }
 
+static int test_stream(const char *base, OpenAIProtocol protocol) {
+  const char *paths[] = {"stream_invalid", "stream_gap", "stream_fractional",
+                         "stream_negative", "stream_missing", "stream_valid"};
+  size_t count = protocol == PROTOCOL_RESPONSES
+                     ? 1
+                     : sizeof(paths) / sizeof(paths[0]);
+  for (size_t i = 0; i < count; ++i) {
+    char url[256];
+    snprintf(url, sizeof(url), "%s/%s", base, paths[i]);
+    OpenAIConfig config = {
+        .common = {.api_key = "secret", .base_url = url, .model = "test-model"},
+        .protocol = protocol};
+    LLMProvider *provider = NULL;
+    CHECK(openai_provider_init(&provider, &config) == AGENT_OK);
+    Message message = {.role = USER_MESSAGE, .content = "hello"};
+    MessageArrary array = {.items = &message, .count = 1, .capacity = 1};
+    Context context = {.array = &array};
+    LLMRequest request = {.context = &context, .stream = 1};
+    LLMResponse *response = NULL;
+    AgentError error = {0};
+    int status = llm_provider_complete(provider, &request, &response, &error);
+    if (strcmp(paths[i], "stream_valid") == 0) {
+      CHECK(status == AGENT_OK && response != NULL);
+      CHECK(response->finish_reason == LLM_FINISH_TOOL_CALLS);
+      CHECK(response->tool_call_count == 2);
+      CHECK(strcmp(response->tool_calls[0].call_id, "call_1") == 0);
+      CHECK(strcmp(response->tool_calls[1].call_id, "call_2") == 0);
+      CHECK(strcmp(response->tool_calls[0].arguments_json, "{}") == 0);
+      CHECK(strcmp(response->tool_calls[1].arguments_json, "{}") == 0);
+      llm_response_destroy(response);
+    } else {
+      CHECK(status == AGENT_ERR_LLM_RESPONSE && response == NULL);
+    }
+    CHECK(openai_provider_destory(provider) == AGENT_OK);
+  }
+  return 0;
+}
+
 int main(int argc, char **argv) {
   CHECK(argc == 2);
   char url[256];
@@ -169,6 +207,7 @@ int main(int argc, char **argv) {
     CHECK(test_tools(argv[1], protocol) == 0);
     CHECK(test_sessions(argv[1], protocol) == 0);
     CHECK(test_timeout(argv[1], protocol) == 0);
+    CHECK(test_stream(argv[1], protocol) == 0);
   }
   OpenAIConfig config = {.common = {.api_key = "secret\r\nX-Bad: value",
                                     .base_url = argv[1],

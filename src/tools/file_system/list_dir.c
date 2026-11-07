@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "agent/tools/file_system/list_dir.h"
 #include "agent/infra.h"
+#include "../internal.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -72,6 +73,10 @@ AgentStatus list_dir(ToolContext *ctx, const cJSON *arguments,
     }
     if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
       continue;
+    if (!tool_utf8((const unsigned char *)entry->d_name, strlen(entry->d_name))) {
+      status = AGENT_ERR_INVAILD_ARGUMENT;
+      break;
+    }
     struct stat info;
     if (fstatat(dirfd(dir), entry->d_name, &info, AT_SYMLINK_NOFOLLOW) != 0) {
       status = AGENT_ERR_IO;
@@ -111,7 +116,9 @@ done:
       *output = NULL;
     }
     ERROR(error, status == AGENT_ERR_IO ? "Could not read directory entries" :
-                                         "Could not allocate directory listing");
+                 status == AGENT_ERR_INVAILD_ARGUMENT
+                     ? "Directory entry name is not UTF-8 text"
+                     : "Could not allocate directory listing");
   }
   return status;
 }

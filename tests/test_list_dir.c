@@ -49,6 +49,30 @@ int main(void) {
   cJSON_Delete(items);
   free(output->content);
   free(output);
+  char special[256];
+  const char *unicode_name = "文件-\xf0\x9f\x98\x80";
+  snprintf(special, sizeof(special), "%s/%s", directory, unicode_name);
+  f = fopen(special, "w");
+  CHECK(f != NULL && fclose(f) == 0);
+  CHECK(list_dir(NULL, args, &output, &error) == AGENT_OK);
+  items = cJSON_Parse(output->content);
+  found = 0;
+  cJSON_ArrayForEach(item, items) {
+    const cJSON *name = cJSON_GetObjectItemCaseSensitive(item, "name");
+    if (cJSON_IsString(name) && strcmp(name->valuestring, unicode_name) == 0)
+      found = 1;
+  }
+  CHECK(found);
+  cJSON_Delete(items);
+  free(output->content);
+  free(output);
+  CHECK(unlink(special) == 0);
+  snprintf(special, sizeof(special), "%s/bad\xff", directory);
+  f = fopen(special, "w");
+  CHECK(f != NULL && fclose(f) == 0);
+  CHECK(list_dir(NULL, args, &output, &error) == AGENT_ERR_INVAILD_ARGUMENT);
+  CHECK(output == NULL);
+  CHECK(unlink(special) == 0);
   cJSON_Delete(args);
   args = cJSON_Parse("{\"path\":\"/nonexistent-tiny-agent-directory\"}");
   CHECK(list_dir(NULL, args, &output, &error) == AGENT_ERR_IO);
