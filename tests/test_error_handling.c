@@ -28,7 +28,7 @@ static int failure(void *ctx, const LLMRequest *request, LLMResponse **out,
   (void)request;
   (void)out;
   if (ctx != NULL)
-    ERROR(error, "provider detail");
+    AGENT_ERROR(error, "provider detail");
   return AGENT_ERR_HTTP_TIMEOUT;
 }
 

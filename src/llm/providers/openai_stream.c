@@ -1,5 +1,5 @@
-#include "openai_internal.h"
 #include "agent/infra.h"
+#include "openai_internal.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -55,7 +55,7 @@ static ChatCall *chat_slot(ChatAccum *accum, long index) {
     if (calls == NULL)
       return NULL;
     for (size_t i = accum->capacity; i < capacity; ++i)
-      calls[i] = (ChatCall){0};
+      memset(&calls[i], 0, sizeof(calls[i]));
     accum->calls = calls;
     accum->capacity = capacity;
   }
@@ -71,7 +71,8 @@ static int chat_feed(void *impl, const char *payload) {
     return AGENT_ERR_LLM_RESPONSE;
   int status = AGENT_OK;
   cJSON *choices = cJSON_GetObjectItemCaseSensitive(root, "choices");
-  cJSON *choice = cJSON_IsArray(choices) ? cJSON_GetArrayItem(choices, 0) : NULL;
+  cJSON *choice =
+      cJSON_IsArray(choices) ? cJSON_GetArrayItem(choices, 0) : NULL;
   if (cJSON_IsObject(choice)) {
     cJSON *finish = cJSON_GetObjectItemCaseSensitive(choice, "finish_reason");
     if (cJSON_IsString(finish)) {
@@ -144,9 +145,10 @@ static int chat_feed(void *impl, const char *payload) {
   return status;
 }
 
-static int chat_finalize(ChatAccum *accum, LLMResponse **out, AgentError *error) {
+static int chat_finalize(ChatAccum *accum, LLMResponse **out,
+                         AgentError *error) {
   if (accum->finish_reason == NULL) {
-    ERROR(error, "OpenAI stream ended without a finish reason");
+    AGENT_ERROR(error, "OpenAI stream ended without a finish reason");
     return AGENT_ERR_LLM_RESPONSE;
   }
   size_t call_total = 0;
@@ -168,10 +170,9 @@ static int chat_finalize(ChatAccum *accum, LLMResponse **out, AgentError *error)
   cJSON *message = cJSON_AddObjectToObject(choice, "message");
   if (message == NULL)
     goto done;
-  const char *content =
-      accum->has_content ? string_c_str(&accum->content)
-      : call_total != 0  ? NULL
-                         : "";
+  const char *content = accum->has_content ? string_c_str(&accum->content)
+                        : call_total != 0  ? NULL
+                                           : "";
   if (content != NULL) {
     if (cJSON_AddStringToObject(message, "content", content) == NULL)
       goto done;
@@ -306,17 +307,17 @@ static int responses_feed(void *impl, const char *payload) {
 static int responses_finalize(ResponsesAccum *accum, LLMResponse **out,
                               AgentError *error) {
   if (accum->has_error) {
-    ERROR(error, accum->error_message.length
-                     ? string_c_str(&accum->error_message)
-                     : "OpenAI stream reported an error");
+    AGENT_ERROR(error, accum->error_message.length
+                           ? string_c_str(&accum->error_message)
+                           : "OpenAI stream reported an error");
     return AGENT_ERR_LLM_RESPONSE;
   }
   if (!accum->has_final) {
-    ERROR(error, "OpenAI stream ended without a completed response");
+    AGENT_ERROR(error, "OpenAI stream ended without a completed response");
     return AGENT_ERR_LLM_RESPONSE;
   }
-  return openai_responses_decode_response(string_c_str(&accum->final_json),
-                                          out, error);
+  return openai_responses_decode_response(string_c_str(&accum->final_json), out,
+                                          error);
 }
 
 static void responses_free(ResponsesAccum *accum) {
@@ -391,7 +392,8 @@ int openai_stream_complete(HttpClient *client, const HttpRequest *http_request,
   if (out != NULL)
     *out = NULL;
   if (client == NULL || http_request == NULL || out == NULL) {
-    ERROR(error, "OpenAI streaming requires a client, request and output");
+    AGENT_ERROR(error,
+                "OpenAI streaming requires a client, request and output");
     return AGENT_ERR_NULL_POINTER;
   }
   ChatAccum chat = {.on_delta = on_delta, .delta_userdata = delta_userdata};
@@ -399,7 +401,8 @@ int openai_stream_complete(HttpClient *client, const HttpRequest *http_request,
                               .delta_userdata = delta_userdata};
   StreamState state = {.protocol = protocol};
   state.feed = protocol == PROTOCOL_RESPONSES ? responses_feed : chat_feed;
-  state.impl = protocol == PROTOCOL_RESPONSES ? (void *)&responses : (void *)&chat;
+  state.impl =
+      protocol == PROTOCOL_RESPONSES ? (void *)&responses : (void *)&chat;
   string_init(&state.raw);
   string_init(&state.line);
 
@@ -409,9 +412,9 @@ int openai_stream_complete(HttpClient *client, const HttpRequest *http_request,
   if (status != AGENT_OK) {
     if (state.status != AGENT_OK) {
       status = state.status;
-      ERROR(error, status == AGENT_ERR_OUT_OF_MEMORY
-                       ? "Could not allocate OpenAI stream"
-                       : "Could not parse OpenAI stream");
+      AGENT_ERROR(error, status == AGENT_ERR_OUT_OF_MEMORY
+                             ? "Could not allocate OpenAI stream"
+                             : "Could not parse OpenAI stream");
     }
     goto done;
   }
@@ -433,8 +436,9 @@ int openai_stream_complete(HttpClient *client, const HttpRequest *http_request,
     status = AGENT_ERR_HTTP;
     goto done;
   }
-  status = protocol == PROTOCOL_RESPONSES ? responses_finalize(&responses, out, error)
-                                          : chat_finalize(&chat, out, error);
+  status = protocol == PROTOCOL_RESPONSES
+               ? responses_finalize(&responses, out, error)
+               : chat_finalize(&chat, out, error);
 
 done:
   chat_free(&chat);
@@ -442,6 +446,6 @@ done:
   string_destroy(&state.raw);
   string_destroy(&state.line);
   if (status != AGENT_OK && (error == NULL || error->message[0] == '\0'))
-    ERROR(error, "Could not parse OpenAI stream");
+    AGENT_ERROR(error, "Could not parse OpenAI stream");
   return status;
 }

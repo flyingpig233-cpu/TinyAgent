@@ -1,15 +1,11 @@
-#define _POSIX_C_SOURCE 200809L
 #include "agent/tools/file_system/list_dir.h"
-#include "agent/infra.h"
 #include "../internal.h"
+#include "agent/infra.h"
 
-#include <dirent.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 
 const ToolDefinition list_dir_tool = {
     .name = "list_dir",
@@ -20,14 +16,13 @@ const ToolDefinition list_dir_tool = {
     .fn = list_dir,
 };
 
-static const char *entry_type(mode_t mode) {
-  if (S_ISREG(mode)) return "file";
-  if (S_ISDIR(mode)) return "directory";
-  if (S_ISLNK(mode)) return "symlink";
-  if (S_ISFIFO(mode)) return "fifo";
-  if (S_ISSOCK(mode)) return "socket";
-  if (S_ISCHR(mode)) return "character_device";
-  if (S_ISBLK(mode)) return "block_device";
+static const char *entry_type(const TaFileStat *info) {
+  if (info->symlink)
+    return "symlink";
+  if (info->regular)
+    return "file";
+  if (info->directory)
+    return "directory";
   return "unknown";
 }
 
@@ -40,22 +35,23 @@ AgentStatus list_dir(ToolContext *ctx, const cJSON *arguments,
   (void)ctx;
   agent_error_clear(error);
   if (output == NULL || arguments == NULL) {
-    ERROR(error, "Arguments and output are required");
+    AGENT_ERROR(error, "Arguments and output are required");
     return AGENT_ERR_NULL_POINTER;
   }
   *output = NULL;
   const cJSON *path = cJSON_GetObjectItemCaseSensitive(arguments, "path");
   if (!cJSON_IsObject(arguments) || !cJSON_IsString(path) ||
       path->valuestring == NULL || path->valuestring[0] == '\0') {
-    ERROR(error, "path must be a nonempty string");
+    AGENT_ERROR(error, "path must be a nonempty string");
     return AGENT_ERR_INVAILD_ARGUMENT;
   }
 
-  DIR *dir = opendir(path->valuestring);
+  TaDir *dir = ta_dir_open(path->valuestring);
   if (dir == NULL) {
     char message[256];
-    snprintf(message, sizeof(message), "Could not open directory: %s", strerror(errno));
-    ERROR(error, message);
+    snprintf(message, sizeof(message), "Could not open directory: %s",
+             strerror(errno));
+    AGENT_ERROR(error, message);
     return AGENT_ERR_IO;
   }
   AgentStatus status = AGENT_OK;
@@ -65,40 +61,39 @@ AgentStatus list_dir(ToolContext *ctx, const cJSON *arguments,
     goto done;
   }
   for (;;) {
-    errno = 0;
-    struct dirent *entry = readdir(dir);
-    if (entry == NULL) {
-      if (errno != 0) status = AGENT_ERR_IO;
+    char *name = NULL;
+    TaFileStat info;
+    int next = ta_dir_next(dir, &name, &info);
+    if (next == 0)
       break;
-    }
-    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
-      continue;
-    if (!tool_utf8((const unsigned char *)entry->d_name, strlen(entry->d_name))) {
-      status = AGENT_ERR_INVAILD_ARGUMENT;
-      break;
-    }
-    struct stat info;
-    if (fstatat(dirfd(dir), entry->d_name, &info, AT_SYMLINK_NOFOLLOW) != 0) {
+    if (next < 0) {
       status = AGENT_ERR_IO;
       break;
     }
+    if (!tool_utf8((const unsigned char *)name, strlen(name))) {
+      free(name);
+      status = AGENT_ERR_INVAILD_ARGUMENT;
+      break;
+    }
     cJSON *item = cJSON_CreateObject();
-    if (item == NULL ||
-        !cJSON_AddStringToObject(item, "name", entry->d_name) ||
-        !cJSON_AddStringToObject(item, "type", entry_type(info.st_mode)) ||
-        !cJSON_AddNumberToObject(item, "size", (double)info.st_size) ||
-        !cJSON_AddNumberToObject(item, "mode", (double)(info.st_mode & 07777)) ||
-        !cJSON_AddNumberToObject(item, "modified", (double)info.st_mtime) ||
+    if (item == NULL || !cJSON_AddStringToObject(item, "name", name) ||
+        !cJSON_AddStringToObject(item, "type", entry_type(&info)) ||
+        !cJSON_AddNumberToObject(item, "size", (double)info.size) ||
+        !cJSON_AddNumberToObject(item, "mode", (double)info.mode) ||
+        !cJSON_AddNumberToObject(item, "modified", (double)info.mtime) ||
         !cJSON_AddItemToArray(entries, item)) {
       cJSON_Delete(item);
+      free(name);
       status = AGENT_ERR_OUT_OF_MEMORY;
       break;
     }
+    free(name);
   }
   if (status == AGENT_OK) {
     char *json = cJSON_PrintUnformatted(entries);
     ToolOutput *result = calloc(1, sizeof(*result));
-    if (json == NULL || result == NULL || full_copy(&result->content, json) != AGENT_OK) {
+    if (json == NULL || result == NULL ||
+        full_copy(&result->content, json) != AGENT_OK) {
       free(result);
       status = AGENT_ERR_OUT_OF_MEMORY;
     } else {
@@ -108,17 +103,18 @@ AgentStatus list_dir(ToolContext *ctx, const cJSON *arguments,
   }
 done:
   cJSON_Delete(entries);
-  if (closedir(dir) != 0 && status == AGENT_OK) status = AGENT_ERR_IO;
+  ta_dir_close(dir);
   if (status != AGENT_OK) {
     if (*output != NULL) {
       free((*output)->content);
       free(*output);
       *output = NULL;
     }
-    ERROR(error, status == AGENT_ERR_IO ? "Could not read directory entries" :
-                 status == AGENT_ERR_INVAILD_ARGUMENT
-                     ? "Directory entry name is not UTF-8 text"
-                     : "Could not allocate directory listing");
+    AGENT_ERROR(error, status == AGENT_ERR_IO
+                           ? "Could not read directory entries"
+                       : status == AGENT_ERR_INVAILD_ARGUMENT
+                           ? "Directory entry name is not UTF-8 text"
+                           : "Could not allocate directory listing");
   }
   return status;
 }

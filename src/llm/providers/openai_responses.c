@@ -230,7 +230,7 @@ int openai_responses_decode_response(const char *json, LLMResponse **out,
     else if (strcmp(reason->valuestring, "content_filter") == 0)
       response->finish_reason = LLM_FINISH_FILTERED;
     else {
-      ERROR(error, reason->valuestring);
+      AGENT_ERROR(error, reason->valuestring);
       goto done;
     }
     status = full_copy(&response->provider_reason, reason->valuestring);
@@ -287,7 +287,7 @@ int openai_responses_decode_response(const char *json, LLMResponse **out,
       if (status != AGENT_OK)
         goto done;
     } else if (strcmp(type, "reasoning") != 0) {
-      ERROR(error, "Unsupported OpenAI Responses output item type");
+      AGENT_ERROR(error, "Unsupported OpenAI Responses output item type");
       status = AGENT_ERR_TOOL_UNSUPPORTED;
       goto done;
     }
@@ -325,6 +325,6 @@ done:
   string_destroy(&text);
   string_destroy(&refusal);
   if (status != AGENT_OK && (error == NULL || error->message[0] == '\0'))
-    ERROR(error, "Could not parse OpenAI Responses response");
+    AGENT_ERROR(error, "Could not parse OpenAI Responses response");
   return status;
 }

@@ -118,7 +118,7 @@ int openai_chat_decode_response(const char *str, LLMResponse **out,
     return AGENT_ERR_NULL_POINTER;
   cJSON *root = cJSON_ParseWithOpts(str, NULL, 1);
   if (root == NULL) {
-    ERROR(error, "Could not parse OpenAI Chat Completions response");
+    AGENT_ERROR(error, "Could not parse OpenAI Chat Completions response");
     return AGENT_ERR_LLM_RESPONSE;
   }
   int status = AGENT_ERR_LLM_RESPONSE;
@@ -223,7 +223,7 @@ done:
   llm_response_destroy(response);
   cJSON_Delete(root);
   if (status != AGENT_OK)
-    ERROR(error, "Could not parse OpenAI Chat Completions response");
+    AGENT_ERROR(error, "Could not parse OpenAI Chat Completions response");
   return status;
 }
 

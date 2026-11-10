@@ -92,5 +92,5 @@ void openai_json_error(AgentError *error, const char *stage,
            cJSON_IsString(code) ? code->valuestring : "",
            cJSON_IsString(message) ? ": " : "",
            cJSON_IsString(message) ? message->valuestring : "");
-  ERROR(error, text);
+  AGENT_ERROR(error, text);
 }

@@ -1,4 +1,6 @@
+#if !defined(_WIN32)
 #define _POSIX_C_SOURCE 200809L
+#endif
 
 #include "agent/agent.h"
 #include "agent/context.h"
@@ -26,12 +28,14 @@ static int cancel_hook(void *userdata) {
   return g_cancel;
 }
 
+#if !defined(_WIN32)
 static long elapsed_ms(struct timespec start) {
   struct timespec now;
   clock_gettime(CLOCK_MONOTONIC, &now);
   return (long)(now.tv_sec - start.tv_sec) * 1000L +
-         (now.tv_nsec - start.tv_nsec) / 1000000L;
+         (long)(now.tv_nsec - start.tv_nsec) / 1000000L;
 }
+#endif
 
 /* A cancelled agent run must stop before it ever consults the provider. */
 static int agent_cancel_test(void) {
@@ -61,6 +65,7 @@ static int agent_cancel_test(void) {
   return 0;
 }
 
+#if !defined(_WIN32)
 /* A cancelled tool subprocess must be killed promptly, not run to completion.
  */
 static int run_command_cancel_test(void) {
@@ -83,6 +88,7 @@ static int run_command_cancel_test(void) {
   g_cancel = 0;
   return 0;
 }
+#endif
 
 typedef struct {
   int mode; /* 0: before tools, 1: during a tool, 2: between tools. */
@@ -126,11 +132,12 @@ static int tool_history_cancel_test(int mode) {
   CancelState state = {.mode = mode};
   ToolCall calls[] = {{"c1", "test", "{}"}, {"c2", "test", "{}"}};
   LLMResponse fixtures[] = {
-      {.finish_reason = LLM_FINISH_TOOL_CALLS, .tool_calls = calls,
+      {.finish_reason = LLM_FINISH_TOOL_CALLS,
+       .tool_calls = calls,
        .tool_call_count = 2},
       {.finish_reason = LLM_FINISH_STOP, .content = "resumed"}};
-  ToolDefinition tool = {.name = "test", .parameters_json = "{}",
-                         .fn = cancel_tool};
+  ToolDefinition tool = {
+      .name = "test", .parameters_json = "{}", .fn = cancel_tool};
   const ToolDefinition *tools[] = {&tool};
   ToolRegistry registry = {.tools = tools, .count = 1, .capacity = 1};
   LLMProvider provider = {0};
@@ -148,7 +155,8 @@ static int tool_history_cancel_test(int mode) {
   CHECK(mock_llm_init(&provider, fixtures, 2) == AGENT_OK);
   CHECK(agent_create(&config, &provider, &registry, &agent) == AGENT_OK);
   CHECK(string_assign(&output, "old") == AGENT_OK);
-  CHECK(agent_run(agent, &session, "go", &output, &error) == AGENT_ERR_CANCELLED);
+  CHECK(agent_run(agent, &session, "go", &output, &error) ==
+        AGENT_ERR_CANCELLED);
   CHECK(strcmp(string_c_str(&output), "old") == 0);
   CHECK(state.calls == (mode == 0 ? 0 : 1));
   CHECK(state.results == 2 && state.errors[1] == 1);
@@ -175,8 +183,10 @@ static int tool_history_cancel_test(int mode) {
 int main(void) {
   if (agent_cancel_test() != 0)
     return 1;
+#if !defined(_WIN32)
   if (run_command_cancel_test() != 0)
     return 1;
+#endif
   for (int mode = 0; mode < 3; ++mode)
     if (tool_history_cancel_test(mode) != 0)
       return 1;

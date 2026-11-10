@@ -5,6 +5,7 @@ add_library(tiny_agent_core STATIC
     llm/mock_llm.c
     infra/string.c
     infra/error.c
+    infra/platform.c
     config.c
     context/session.c
     infra/http_client.c
@@ -35,9 +36,10 @@ find_package(CURL REQUIRED)
 find_package(cJSON CONFIG REQUIRED)
 
 target_link_libraries(tiny_agent_core
+    PUBLIC
+        cjson
     PRIVATE
         CURL::libcurl
-        cjson
 )
 
 tiny_agent_enable_warnings(tiny_agent_core)

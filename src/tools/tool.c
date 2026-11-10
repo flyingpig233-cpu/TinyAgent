@@ -27,33 +27,33 @@ int tool_registry_init(ToolRegistry **registry) {
 int tool_registry_register(ToolRegistry *reg, const ToolDefinition *tool_def, AgentError *error) {
   agent_error_clear(error);
   if (reg == NULL || tool_def == NULL) {
-    ERROR(error, "Registry and tool definition are required");
+    AGENT_ERROR(error, "Registry and tool definition are required");
     return AGENT_ERR_NULL_POINTER;
   }
   if (tool_def->name == NULL || tool_def->name[0] == '\0' ||
       tool_def->parameters_json == NULL || tool_def->fn == NULL ||
       (tool_def->strict != 0 && tool_def->strict != 1) ||
       (tool_def->mutating != 0 && tool_def->mutating != 1)) {
-    ERROR(error, "Invalid tool definition");
+    AGENT_ERROR(error, "Invalid tool definition");
     return AGENT_ERR_INVAILD_ARGUMENT;
   }
   for (size_t i = 0; i < reg->count; ++i) {
     if (strcmp(reg->tools[i]->name, tool_def->name) == 0) {
-      ERROR(error, "Tool name is already registered");
+      AGENT_ERROR(error, "Tool name is already registered");
       return AGENT_ERR_INVAILD_ARGUMENT;
     }
   }
   if (reg->count == reg->capacity) {
     size_t max_capacity = SIZE_MAX / sizeof(*reg->tools);
     if (reg->capacity >= max_capacity) {
-      ERROR(error, "Tool registry capacity exceeded");
+      AGENT_ERROR(error, "Tool registry capacity exceeded");
       return AGENT_ERR_OUT_OF_MEMORY;
     }
     size_t capacity = reg->capacity == 0 ? REGISTRY_DEFAULT_CAPACITY :
         (reg->capacity > max_capacity / 2 ? max_capacity : reg->capacity * 2);
     const ToolDefinition **tools = realloc(reg->tools, capacity * sizeof(*tools));
     if (tools == NULL) {
-      ERROR(error, "Failed to grow tool registry");
+      AGENT_ERROR(error, "Failed to grow tool registry");
       return AGENT_ERR_OUT_OF_MEMORY;
     }
     reg->tools = tools;

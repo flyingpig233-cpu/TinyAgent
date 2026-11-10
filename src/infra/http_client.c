@@ -11,7 +11,8 @@ struct HttpClient {
 };
 
 /* A response body either collected into an HttpResponse and/or forwarded to a
- * caller-supplied write callback. Exactly one of collect/write is normally set. */
+ * caller-supplied write callback. Exactly one of collect/write is normally set.
+ */
 typedef struct {
   HttpResponse *collect;
   size_t capacity; // Allocated bytes, including the trailing NUL.
@@ -96,13 +97,14 @@ int http_client_init(HttpClient **client) {
 }
 
 /* Performs one request. The body is delivered to sink; on a successful
- * transfer *status_code receives the HTTP status (which may be an error code). */
+ * transfer *status_code receives the HTTP status (which may be an error code).
+ */
 static int perform(HttpClient *client, const HttpRequest *request,
                    BodySink *sink, long *status_code, AgentError *error) {
   agent_error_clear(error);
   if (client == NULL || request == NULL || request->url == NULL ||
       sink == NULL) {
-    ERROR(error, "HTTP client, request, URL and response are required");
+    AGENT_ERROR(error, "HTTP client, request, URL and response are required");
     return AGENT_ERR_NULL_POINTER;
   }
   if ((strncmp(request->url, "http://", 7) != 0 &&
@@ -113,7 +115,7 @@ static int perform(HttpClient *client, const HttpRequest *request,
       (curl_off_t)request->body_len < 0 ||
       (uintmax_t)(curl_off_t)request->body_len !=
           (uintmax_t)request->body_len) {
-    ERROR(error, "Invalid HTTP request");
+    AGENT_ERROR(error, "Invalid HTTP request");
     return AGENT_ERR_INVAILD_ARGUMENT;
   }
   struct curl_slist *headers = NULL;
@@ -122,13 +124,13 @@ static int perform(HttpClient *client, const HttpRequest *request,
   char curl_error[CURL_ERROR_SIZE] = {0};
   for (size_t i = 0; i < request->header_count; ++i) {
     if (request->headers[i] == NULL) {
-      ERROR(error, "HTTP header must not be NULL");
+      AGENT_ERROR(error, "HTTP header must not be NULL");
       status = AGENT_ERR_INVAILD_ARGUMENT;
       goto done;
     }
     struct curl_slist *next = curl_slist_append(headers, request->headers[i]);
     if (next == NULL) {
-      ERROR(error, "Could not allocate HTTP headers");
+      AGENT_ERROR(error, "Could not allocate HTTP headers");
       status = AGENT_ERR_OUT_OF_MEMORY;
       goto done;
     }
@@ -167,8 +169,8 @@ static int perform(HttpClient *client, const HttpRequest *request,
   if (result != CURLE_OK)
     goto curl_failed;
   if (status_code != NULL) {
-    result = curl_easy_getinfo(client->handle, CURLINFO_RESPONSE_CODE,
-                               status_code);
+    result =
+        curl_easy_getinfo(client->handle, CURLINFO_RESPONSE_CODE, status_code);
     if (result != CURLE_OK)
       goto curl_failed;
   }
@@ -177,16 +179,16 @@ static int perform(HttpClient *client, const HttpRequest *request,
 curl_failed:
   if (sink->failed) {
     status = AGENT_ERR_OUT_OF_MEMORY;
-    ERROR(error, "Could not allocate HTTP response");
+    AGENT_ERROR(error, "Could not allocate HTTP response");
   } else if (result == CURLE_ABORTED_BY_CALLBACK) {
     status = AGENT_ERR_CANCELLED;
-    ERROR(error, "HTTP request cancelled");
+    AGENT_ERROR(error, "HTTP request cancelled");
   } else if (result == CURLE_OPERATION_TIMEDOUT) {
     status = AGENT_ERR_HTTP_TIMEOUT;
-    ERROR(error, curl_error[0] ? curl_error : curl_easy_strerror(result));
+    AGENT_ERROR(error, curl_error[0] ? curl_error : curl_easy_strerror(result));
   } else {
     status = AGENT_ERR_HTTP;
-    ERROR(error, curl_error[0] ? curl_error : curl_easy_strerror(result));
+    AGENT_ERROR(error, curl_error[0] ? curl_error : curl_easy_strerror(result));
   }
 done:
   curl_slist_free_all(headers);
@@ -209,7 +211,7 @@ int http_client_request(HttpClient *client, const HttpRequest *request,
   if (buffer.body == NULL) {
     buffer.body = calloc(1, 1);
     if (buffer.body == NULL) {
-      ERROR(error, "Could not allocate HTTP response");
+      AGENT_ERROR(error, "Could not allocate HTTP response");
       return AGENT_ERR_OUT_OF_MEMORY;
     }
   }
@@ -250,7 +252,7 @@ void http_response_free(HttpResponse *response) {
   if (response == NULL)
     return;
   free(response->body);
-  *response = (HttpResponse){0};
+  memset(response, 0, sizeof(*response));
 }
 
 int http_client_destroy(HttpClient *client) {
