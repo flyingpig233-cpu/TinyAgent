@@ -51,7 +51,9 @@ jobs:
           build-essential \
           libcurl4-openssl-dev \
           libcjson-dev \
-          libssl-dev
+          libncurses-dev \
+          libssl-dev \
+          ripgrep
 
     - name: Install dependencies (Windows)
       if: runner.os == 'Windows'
@@ -86,8 +88,8 @@ jobs:
         $toolchain = Join-Path $env:VCPKG_INSTALLATION_ROOT "scripts/buildsystems/vcpkg.cmake"
 
         cmake -B "${{ steps.strings.outputs.build-output-dir }}" `
+          -A x64 `
           "-DCMAKE_TOOLCHAIN_FILE=$toolchain" `
-          "-DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}" `
           "-DCMAKE_C_COMPILER=${{ matrix.c_compiler }}" `
           "-DCMAKE_BUILD_TYPE=${{ matrix.build_type }}" `
           -S "${{ github.workspace }}"
