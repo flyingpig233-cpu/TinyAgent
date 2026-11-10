@@ -4,10 +4,20 @@ A small C17 agent with a reusable HTTP transport and an OpenAI-compatible provid
 
 ## Build and test
 
-Requires CMake, a C17 compiler, libcurl, libcJSON, and the wide-character
-ncurses development package (`ncursesw`). The coding tools target POSIX
-systems; `search` also requires `rg` (ripgrep) on PATH. Python 3 enables the
-local HTTP integration tests. No API key is needed to run the tests.
+Requires CMake, a C17 compiler, libcurl, and libcJSON. On POSIX systems the
+full-screen CLI also needs the wide-character ncurses development package
+(`ncursesw`); Windows builds use the line-oriented REPL. `search` requires `rg`
+(ripgrep) on PATH on every platform. Python 3 enables the local HTTP
+integration tests. No API key is needed to run the tests.
+
+On Windows, configure with the vcpkg toolchain so CMake can find curl and
+cJSON:
+
+```powershell
+cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug

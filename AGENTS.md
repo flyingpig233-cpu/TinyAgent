@@ -6,7 +6,7 @@ TinyAgent is a C17 agent runtime: a reusable static library (`tiny_agent_core`) 
 
 - **Library first.** `include/agent/**` is the public API; `app/` is one consumer and reference host.
 - **Provider-agnostic core.** `src/core/agent.c` talks to any `LLMProvider`; OpenAI is one implementation. `src/llm/mock_llm.c` is a production-shipped test provider.
-- **POSIX-targeted.** `fork`/`execvp`/`pipe`/`poll`, `/bin/sh -c`, and `rg` are used directly. Windows is unsupported.
+- **Portable core.** The library builds as C17 on POSIX and Windows. POSIX `fork`/`execvp`/`pipe`/`poll`, `/bin/sh -c`, and filesystem calls are isolated in `src/infra/platform.c`; Windows uses Win32 process, pipe, and wide-character file APIs. The CLI falls back to line mode on Windows because the full-screen backend requires ncursesw. `rg` is still required on `PATH` for `search`.
 - **No install/export rules.** Consumers are expected to use `add_subdirectory` and link `TinyAgent::Core`.
 
 ## Architecture & Data Flow
@@ -28,7 +28,7 @@ flowchart LR
 
 **Layering, bottom-up**
 
-1. `src/infra/` — `String` buffer helpers, `HttpClient` (libcurl), error utilities. No upward dependencies.
+1. `src/infra/` — `String` buffer helpers, `HttpClient` (libcurl), error utilities, and the `platform` layer (monotonic clock, tty detection, UTF-8 paths, files, directories, atomic publish). No upward dependencies.
 2. `src/context/` — in-memory message history (`Context`) and system prompt/session (`Session`).
 3. `src/llm/` — `LLMProvider` vtable (`complete`, `destory`), response destruction, mock provider.
 4. `src/llm/providers/` — OpenAI request/response codecs (`openai_chat.c`, `openai_responses.c`, `openai_json.c`, `openai_stream.c`) and provider wiring (`openai.c`).
@@ -61,7 +61,7 @@ flowchart LR
 | `src/llm/providers/` | OpenAI Chat Completions + Responses codecs, SSE streaming, JSON helpers. |
 | `src/tools/` | Registry, shared argument/JSON/process helpers, `run_command`. |
 | `src/tools/file_system/` | `list_dir`, `read_file`, `search`, `write_file`, `edit_file`. |
-| `src/infra/` | `String`, HTTP client, error helpers. |
+| `src/infra/` | `String`, HTTP client, error helpers, POSIX/Windows platform layer. |
 | `src/context/` | Conversation history and session state. |
 | `src/memory/` | Empty placeholder; not referenced by CMake. |
 | `include/agent/` | Public headers. Internal-only headers stay in `src/` (`src/tools/internal.h`, `src/llm/providers/openai_internal.h`). |
@@ -106,7 +106,7 @@ find src app include tests -name '*.c' -o -name '*.h' | xargs clang-format -i
 
 **Error handling**
 
-- Functions return `AgentStatus`; `AGENT_OK` is success. Use `AgentError` out-parameters plus `agent_error_set`/`agent_error_clear` and the `ERROR(error, "...")` macro for context (message, file, function, line).
+- Functions return `AgentStatus`; `AGENT_OK` is success. Use `AgentError` out-parameters plus `agent_error_set`/`agent_error_clear` and the `AGENT_ERROR(error, "...")` macro for context (message, file, function, line).
 - Do not return `-1` for library errors. Do not `abort` on bad input.
 - Tool execution failures may either return non-OK or return `AGENT_OK` with `ToolOutput.is_error = 1`. The content is always sent to the model so it can retry. Use `tool_fail`/`tool_json` helpers in `src/tools/internal.h`.
 - Preserve existing misspelled public identifiers; they are part of the ABI/API: `openai_provider_destory`, `llm_provider_destory`, `context_destory`, `session_destory`, `tool_registry_destory`, `AGENT_ERR_INVAILD_ARGUMENT`, `MessageArrary`, and the `LLMProviderOps.destory` field.
@@ -155,15 +155,31 @@ find src app include tests -name '*.c' -o -name '*.h' | xargs clang-format -i
 | `app/tui.c` | ncursesw full-screen backend: layout, editor, history, scrollback, approval. |
 | `tests/CMakeLists.txt` | All test registration, timeouts, Python gating. |
 
+## Portability and strict builds
+
+- GCC/Clang build with `-std=c17 -pedantic-errors -Wall -Wextra -Werror` plus
+  `-Wstrict-prototypes -Wmissing-prototypes -Wold-style-definition -Wvla
+  -Wundef -Wshadow -Wformat=2`. MSVC builds with `/std:c17 /W4 /WX /utf-8`.
+- Keep platform-specific code in `src/infra/platform.c` or behind
+  `#if defined(_WIN32)`. Paths and strings crossing the API are UTF-8; Windows
+  converts to UTF-16 at the Win32 boundary.
+- Do not introduce a public macro named `ERROR`: Windows headers define it.
+  Use `AGENT_ERROR`.
+- The POSIX-only tests (`test_read_file`, `test_list_dir`, `test_coding_tools`)
+  and the PTY CLI tests are registered only under `if (UNIX)`.
+  `test_cancellation` and `test_platform` run everywhere; the former compiles
+  its `run_command` subprocess case only on POSIX. Windows runs the portable C
+  tests plus the fake-server tests.
+
 ## Runtime/Tooling Preferences
 
-- **Compiler/runtime:** C17 (`CMAKE_C_EXTENSIONS OFF`), GCC/Clang on POSIX. CMake ≥ 3.16; Ninja is the generator in the existing build tree.
-- **Dependencies:** libcurl (`CURL::libcurl`), cJSON (`find_package(cJSON CONFIG)` for the core library; pkg-config `libcjson` for tests), ncursesw (`find_package(Curses)` with `CURSES_NEED_WIDE`), POSIX libc. Python 3 is optional and only enables integration tests.
+- **Compiler/runtime:** C17 (`-std=c17` / `/std:c17`, no GNU extensions), GCC/Clang on POSIX, MSVC on Windows. CMake ≥ 3.16; Ninja is the generator in the existing build tree.
+- **Dependencies:** libcurl (`CURL::libcurl`), cJSON (`find_package(cJSON CONFIG)`; PUBLIC because `agent/tool.h` includes it), POSIX libc on Unix, Win32 + UCRT on Windows. ncursesw (`find_package(Curses)` with `CURSES_NEED_WIDE`) is required only for the POSIX full-screen TUI. Python 3 is optional and only enables integration tests.
 - **Runtime dependency:** `rg` (ripgrep) must be on `PATH` for the `search` tool.
 - **Build artifacts:** `build/` is ignored and untracked; do not commit `.VSCodeCounter/`, object files, or generated libraries. `compile_commands.json` lives at `build/compile_commands.json`.
-- **No install rules, no CI, no CMake presets, no sanitizer targets.** Do not assume `cmake --install` works.
+- **No install rules, no CMake presets, no sanitizer targets.** The GitHub Actions workflow (`.github/workflows/cmake-multi-platform.yml`) builds with GCC, Clang, and MSVC. Do not assume `cmake --install` works.
 - **CLI vs library defaults differ:** zero-initialized `OpenAIConfig` selects Chat Completions, while the CLI defaults to Responses with `deepseek-flash`. The CLI reads `TINY_AGENT_API_KEY` first, then `DEEPSEEK_API_KEY`.
-- Public `include/agent/tool.h` includes `<cjson/cJSON.h>`, so consumers with a non-default cJSON prefix need the same pkg-config target.
+- Public `include/agent/tool.h` includes `<cjson/cJSON.h>`, so `tiny_agent_core` links cJSON `PUBLIC`; consumers using `add_subdirectory` inherit its include dirs and library.
 
 ## Testing & QA
 
@@ -194,7 +210,7 @@ python3 tests/openai_server_test.py build/tests/test_openai_complete
 
 - `test_agent.c` is an empty placeholder that always passes; the real loop coverage is `test_agent_run.c`.
 - In Release builds, `NDEBUG` removes `assert` from `test_tool_registry.c`; use Debug.
-- If Python 3 is missing, five CTest entries silently disappear — check `ctest -N` counts, not just "all tests passed".
+- If Python 3 is missing, the Python-driven CTest entries silently disappear — check `ctest -N` counts, not just "all tests passed".
 - `test_coding_tools` hard-fails without `rg`; POSIX `/bin/sh` is required. There are no skip conditions.
 - Several tests are timing-sensitive (50 ms timeout vs 200 ms server delay, cancellation assertions under 2 s). Prefer generous margins; do not add sleeps without need.
 - `ctest` uses `build/tests` as the working directory; tests that `chdir` must restore or use absolute paths.
