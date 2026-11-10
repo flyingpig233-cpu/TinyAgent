@@ -1,12 +1,26 @@
+#if !defined(_WIN32)
 #define _POSIX_C_SOURCE 200809L
+#endif
 
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#if defined(_WIN32)
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0601
+#endif
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
 #include <time.h>
 #include <unistd.h>
+#endif
+
+#include "infra/platform.h"
 
 #include "agent/agent.h"
 #include "agent/infra.h"
@@ -55,9 +69,14 @@ static void on_sigint(int sig) {
    * the in-flight request or tool; libcurl sees it through CURLOPT_XFERINFO. */
   g_interrupt = 1;
   if (!g_run_active && !g_fullscreen_active) {
+#if defined(_WIN32)
+    fputs("^C\n", stderr);
+    fflush(stderr);
+#else
     static const char message[] = "^C\n";
     ssize_t ignored = write(STDERR_FILENO, message, sizeof(message) - 1);
     (void)ignored;
+#endif
   }
 }
 
@@ -65,6 +84,35 @@ static void on_terminate(int sig) {
   g_terminate_signal = sig;
   g_interrupt = 1;
 }
+
+#if defined(_WIN32)
+
+static BOOL WINAPI on_console_ctrl(DWORD type) {
+  switch (type) {
+  case CTRL_C_EVENT:
+  case CTRL_BREAK_EVENT:
+    on_sigint(0);
+    return TRUE;
+  case CTRL_CLOSE_EVENT:
+  case CTRL_LOGOFF_EVENT:
+  case CTRL_SHUTDOWN_EVENT:
+    on_terminate(SIGTERM);
+    return TRUE;
+  default:
+    return FALSE;
+  }
+}
+
+static void install_signal_handlers(void) {
+  (void)SetConsoleCtrlHandler(on_console_ctrl, TRUE);
+}
+
+/* The console handler covers termination; there is nothing to swap around the
+ * full-screen backend (which is not built on Windows). */
+static void install_terminate_handlers(void) {}
+static void restore_terminate_handlers(void) {}
+
+#else
 
 static void install_signal_handlers(void) {
   struct sigaction sa;
@@ -104,6 +152,8 @@ static void restore_terminate_handlers(void) {
   sigaction(SIGTERM, &sa, NULL);
   sigaction(SIGHUP, &sa, NULL);
 }
+
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Command-line options                                                */
@@ -588,12 +638,7 @@ static int report_run_error(int status, const AgentError *error,
   return EXIT_FAILURE;
 }
 
-static long monotonic_ms(void) {
-  struct timespec now;
-  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
-    return 0;
-  return (long)now.tv_sec * 1000L + now.tv_nsec / 1000000L;
-}
+static long monotonic_ms(void) { return (long)ta_monotonic_ms(); }
 
 /* Emits a JSON string literal, escaping quotes, backslashes and control
  * characters. Valid UTF-8 bytes pass through unchanged. */
@@ -879,20 +924,28 @@ static int run_interactive(Agent *agent, Session *session,
 /* The status line uses ANSI cursor movement, so disable it when the terminal
  * is dumb or the user opted out with NO_COLOR. */
 static int terminal_supports_status(void) {
+#if defined(_WIN32)
+  return 0;
+#else
   const char *term = getenv("TERM");
   if (term == NULL || strcmp(term, "dumb") == 0)
     return 0;
   const char *no_color = getenv("NO_COLOR");
   return no_color == NULL || no_color[0] == '\0';
+#endif
 }
 
 /* The full-screen UI needs all three standard streams on a real terminal and a
  * usable terminfo entry. NO_COLOR only disables the line-mode status escape. */
 static int terminal_can_fullscreen(void) {
+#if defined(_WIN32)
+  return 0;
+#else
   const char *term = getenv("TERM");
   if (term == NULL || term[0] == '\0' || strcmp(term, "dumb") == 0)
     return 0;
-  return isatty(STDIN_FILENO) && isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
+  return ta_isatty(0) && ta_isatty(1) && ta_isatty(2);
+#endif
 }
 
 int main(int argc, char **argv) {
@@ -912,7 +965,7 @@ int main(int argc, char **argv) {
 
   install_signal_handlers();
 
-  int prompt_enabled = isatty(STDIN_FILENO);
+  int prompt_enabled = ta_isatty(0);
 
   /* Decide where the per-round transcript goes. stdout must stay clean when
    * the answer is meant to be consumed by another program. */
@@ -926,11 +979,15 @@ int main(int argc, char **argv) {
   }
 
   /* The live status line lives on stderr, never stdout, and only when stderr
-   * is a real terminal. --json keeps stderr for diagnostics only. */
+   * is a real terminal. The prompt may still use stderr when ANSI escapes are
+   * unavailable (for example the Windows console). --json keeps stderr for
+   * diagnostics only. */
+  int stderr_tty = ta_isatty(2);
   int status_tty =
-      !opts.output_json && isatty(STDERR_FILENO) && terminal_supports_status();
+      !opts.output_json && stderr_tty && terminal_supports_status();
   UiConfig ui_config = {.transcript = transcript,
-                        .status = status_tty ? stderr : NULL,
+                        .status =
+                            (!opts.output_json && stderr_tty) ? stderr : NULL,
                         .tty = status_tty,
                         .stream_to_stdout = opts.stream && !opts.output_json,
                         .quiet = opts.quiet,

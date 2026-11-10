@@ -1,12 +1,13 @@
-#define _POSIX_C_SOURCE 200809L
-
 #include "ui.h"
 
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
+#include "infra/platform.h"
+
+#ifndef TINY_AGENT_NO_TUI
 #include "tui.h"
+#endif
 
 #define UI_TICK_MS 100
 
@@ -23,16 +24,13 @@ struct Ui {
   const char *phase;
   long run_started_ms;
   long last_tick_ms;
+#ifndef TINY_AGENT_NO_TUI
   Tui *tui;
+#endif
   int run_ended;
 };
 
-static long monotonic_ms(void) {
-  struct timespec now;
-  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
-    return 0;
-  return (long)now.tv_sec * 1000L + now.tv_nsec / 1000000L;
-}
+static long monotonic_ms(void) { return (long)ta_monotonic_ms(); }
 
 Ui *ui_create(const UiConfig *config) {
   if (config == NULL)
@@ -48,14 +46,56 @@ Ui *ui_create(const UiConfig *config) {
 void ui_destroy(Ui *ui) {
   if (ui == NULL)
     return;
+#ifndef TINY_AGENT_NO_TUI
   if (ui->tui != NULL)
     tui_destroy(ui->tui);
+#endif
   free(ui);
 }
 
 /* ------------------------------------------------------------------ */
 /* Full-screen facade                                                  */
 /* ------------------------------------------------------------------ */
+
+#ifdef TINY_AGENT_NO_TUI
+
+int ui_start_fullscreen(Ui *ui, const char *model, const char *protocol,
+                        const char *session_id) {
+  (void)ui;
+  (void)model;
+  (void)protocol;
+  (void)session_id;
+  return -1;
+}
+
+void ui_stop_fullscreen(Ui *ui) { (void)ui; }
+
+int ui_is_fullscreen(const Ui *ui) {
+  (void)ui;
+  return 0;
+}
+
+UiInputResult ui_read_input(Ui *ui, char **out) {
+  (void)ui;
+  if (out != NULL)
+    *out = NULL;
+  return UI_INPUT_ERROR;
+}
+
+ToolDecision ui_approve(Ui *ui, const char *tool_name,
+                        const char *arguments_json) {
+  (void)ui;
+  (void)tool_name;
+  (void)arguments_json;
+  return TOOL_DECISION_DENY;
+}
+
+int ui_failed(const Ui *ui) {
+  (void)ui;
+  return 0;
+}
+
+#else
 
 int ui_start_fullscreen(Ui *ui, const char *model, const char *protocol,
                         const char *session_id) {
@@ -94,18 +134,22 @@ ToolDecision ui_approve(Ui *ui, const char *tool_name,
   return tui_approve(ui->tui, tool_name, arguments_json);
 }
 
+int ui_failed(const Ui *ui) {
+  return ui != NULL && ui->tui != NULL && tui_failed(ui->tui);
+}
+
+#endif /* TINY_AGENT_NO_TUI */
+
 void ui_message(Ui *ui, const char *text) {
   if (ui == NULL || text == NULL)
     return;
+#ifndef TINY_AGENT_NO_TUI
   if (ui_is_fullscreen(ui)) {
     tui_message(ui->tui, text);
     return;
   }
+#endif
   fprintf(stderr, "%s\n", text);
-}
-
-int ui_failed(const Ui *ui) {
-  return ui != NULL && ui->tui != NULL && tui_failed(ui->tui);
 }
 
 int ui_run_ended(const Ui *ui) { return ui != NULL && ui->run_ended; }
@@ -150,10 +194,12 @@ static void ui_tick(Ui *ui) {
 void ui_set_phase(Ui *ui, const char *phase) {
   if (ui == NULL)
     return;
+#ifndef TINY_AGENT_NO_TUI
   if (ui_is_fullscreen(ui)) {
     tui_set_phase(ui->tui, phase);
     return;
   }
+#endif
   ui->phase = phase != NULL ? phase : "working";
   ui_clear_status(ui);
   ui->last_tick_ms = 0;
@@ -173,11 +219,13 @@ int ui_poll(void *userdata) {
   Ui *ui = userdata;
   if (ui == NULL)
     return 0;
+#ifndef TINY_AGENT_NO_TUI
   if (ui_is_fullscreen(ui)) {
     if (tui_poll(ui->tui))
       return 1;
     return ui->config.cancel_flag != NULL && *ui->config.cancel_flag != 0;
   }
+#endif
   ui_tick(ui);
   return ui->config.cancel_flag != NULL && *ui->config.cancel_flag != 0;
 }
@@ -234,10 +282,12 @@ void ui_on_event(void *userdata, const AgentEvent *event) {
   if (event->type == AGENT_EVENT_RUN_END)
     ui->run_ended = 1;
 
+#ifndef TINY_AGENT_NO_TUI
   if (ui_is_fullscreen(ui)) {
     tui_on_event(ui->tui, event);
     return;
   }
+#endif
 
   FILE *out = ui->config.transcript;
   switch (event->type) {
@@ -333,12 +383,15 @@ void ui_on_event(void *userdata, const AgentEvent *event) {
 
 void ui_on_delta(void *userdata, int round, const char *text) {
   Ui *ui = userdata;
+  (void)round;
   if (ui == NULL)
     return;
+#ifndef TINY_AGENT_NO_TUI
   if (ui_is_fullscreen(ui)) {
     tui_on_delta(ui->tui, round, text);
     return;
   }
+#endif
   if (!ui->config.stream_to_stdout || text == NULL || text[0] == '\0')
     return;
   if (!ui->streaming) {
@@ -393,8 +446,10 @@ void ui_reset_run(Ui *ui) {
   if (ui == NULL)
     return;
   ui->run_ended = 0;
+#ifndef TINY_AGENT_NO_TUI
   if (ui_is_fullscreen(ui))
     tui_reset_run(ui->tui);
+#endif
   ui->streamed = 0;
   ui->streamed_needs_newline = 0;
   ui->streaming = 0;
