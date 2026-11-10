@@ -429,13 +429,15 @@ AgentStatus tool_process(char *const argv[], const char *cwd, int timeout_ms,
       _exit(126);
     if (cwd != NULL && chdir(cwd) != 0) {
       const char message[] = "Could not change working directory\n";
-      (void)write(STDERR_FILENO, message, sizeof(message) - 1);
+      ssize_t ignored = write(STDERR_FILENO, message, sizeof(message) - 1);
+      (void)ignored;
       _exit(126);
     }
     execvp(argv[0], argv);
     const char message[] =
         "Could not execute program (check executable and PATH)\n";
-    (void)write(STDERR_FILENO, message, sizeof(message) - 1);
+    ssize_t ignored = write(STDERR_FILENO, message, sizeof(message) - 1);
+    (void)ignored;
     _exit(127);
   }
   (void)setpgid(child, child);
