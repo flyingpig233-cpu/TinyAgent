@@ -51,6 +51,6 @@ typedef struct {
   void *cancel_userdata; // Passed to is_cancelled unchanged; may be NULL.
 } AgentConfig;
 
-AgentConfig config_default();
+AgentConfig config_default(void);
 
 #endif // TINY_AGENT_CONFIG_H

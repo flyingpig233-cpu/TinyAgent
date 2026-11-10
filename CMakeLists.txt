@@ -5,11 +5,6 @@ project(tiny-agent
     DESCRIPTION "A lightweight AI Agent written in C"
     LANGUAGES C)
 
-
-set(CMAKE_C_STANDARD 17)
-set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_C_EXTENSIONS OFF)
-
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 
@@ -17,9 +12,13 @@ include(CTest)
 
 function(tiny_agent_enable_warnings target)
     if (MSVC)
-        target_compile_options(${target} PRIVATE /W4 /WX)
+        target_compile_definitions(${target} PRIVATE _CRT_SECURE_NO_WARNINGS)
+        target_compile_options(${target} PRIVATE /W4 /WX /std:c17 /utf-8)
     else()
-        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        target_compile_options(${target} PRIVATE
+            -std=c17 -Wall -Wextra -Wpedantic -Werror -pedantic-errors
+            -Wstrict-prototypes -Wmissing-prototypes -Wold-style-definition
+            -Wvla -Wundef -Wshadow -Wformat=2)
     endif()
 endfunction()
 
