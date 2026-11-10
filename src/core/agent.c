@@ -1,13 +1,14 @@
 #include "agent/agent.h"
 #include "agent/tool.h"
 #include <stdlib.h>
+#include <string.h>
 
 struct Agent {
   LLMProvider *llm_provider;
   ToolRegistry *registry;
   const AgentConfig *config;
-  int approve_all;    // Set after TOOL_DECISION_ALLOW_ALL; sticks for the session.
-  int current_round;  // 1-based round in progress, for delta callbacks.
+  int approve_all; // Set after TOOL_DECISION_ALLOW_ALL; sticks for the session.
+  int current_round; // 1-based round in progress, for delta callbacks.
 };
 
 static void agent_delta_bridge(void *userdata, const char *text) {
@@ -62,7 +63,8 @@ static int execute_tool_calls(Agent *agent, Session *session, int round,
     call_event.arguments_json = call.arguments_json;
     emit_event(agent, &call_event);
 
-    const ToolDefinition *tool = tool_registry_find(agent->registry, call.tool_name);
+    const ToolDefinition *tool =
+        tool_registry_find(agent->registry, call.tool_name);
     ToolOutput *tool_output = NULL;
     AgentError tool_error = {0};
     const char *content = NULL;
@@ -74,7 +76,8 @@ static int execute_tool_calls(Agent *agent, Session *session, int round,
     } else if (tool == NULL) {
       content = "Error: requested tool is not registered";
       is_error = 1;
-    } else if ((args = cJSON_ParseWithOpts(call.arguments_json, NULL, 1)) == NULL ||
+    } else if ((args = cJSON_ParseWithOpts(call.arguments_json, NULL, 1)) ==
+                   NULL ||
                !cJSON_IsObject(args)) {
       content = "Error: tool arguments must be a JSON object";
       is_error = 1;
@@ -98,8 +101,9 @@ static int execute_tool_calls(Agent *agent, Session *session, int round,
         int status = tool->fn(&tool_ctx, args, &tool_output, &tool_error);
         if (status == AGENT_ERR_CANCELLED) {
           cancelled = 1;
-          content = tool_error.message[0] ? tool_error.message
-                                          : "Error: tool call cancelled by host";
+          content = tool_error.message[0]
+                        ? tool_error.message
+                        : "Error: tool call cancelled by host";
           is_error = 1;
         } else if (status != AGENT_OK) {
           content = tool_error.message[0] ? tool_error.message
@@ -126,8 +130,10 @@ static int execute_tool_calls(Agent *agent, Session *session, int round,
     result_event.tool_is_error = is_error;
     emit_event(agent, &result_event);
 
-    Message result = {.role = TOOL_MESSAGE, .content = content,
-                      .tool_call_id = call.call_id, .tool_name = call.tool_name};
+    Message result = {.role = TOOL_MESSAGE,
+                      .content = content,
+                      .tool_call_id = call.call_id,
+                      .tool_name = call.tool_name};
     int status = context_append(session->context, &result);
     if (tool_output != NULL) {
       free(tool_output->content);
@@ -204,7 +210,8 @@ static int run_rounds(Agent *agent, Session *session, String *output,
       return status;
     case LLM_FINISH_TOOL_CALLS: {
       int failed = 0;
-      status = execute_tool_calls(agent, session, round, response, &failed, error);
+      status =
+          execute_tool_calls(agent, session, round, response, &failed, error);
       llm_response_destroy(response);
       if (status != AGENT_OK)
         return status;
@@ -285,7 +292,7 @@ int agent_run(Agent *agent, Session *session, const char *input, String *output,
 
   status = run_rounds(agent, session, output, error);
 
-  event = (AgentEvent){0};
+  memset(&event, 0, sizeof(event));
   event.type = AGENT_EVENT_RUN_END;
   event.status = status;
   event.content = status == AGENT_OK ? string_c_str(output) : NULL;

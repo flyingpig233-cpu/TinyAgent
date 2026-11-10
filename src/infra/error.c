@@ -1,9 +1,10 @@
 #include "agent/error.h"
 #include <stdio.h>
+#include <string.h>
 
 void agent_error_clear(AgentError *error) {
   if (error != NULL)
-    *error = (AgentError){0};
+    memset(error, 0, sizeof(*error));
 }
 
 void agent_error_set(AgentError *error, const char *message, const char *file,

@@ -1,5 +1,6 @@
 #include "agent/llm.h"
 #include <stdlib.h>
+#include <string.h>
 
 void llm_response_destroy(LLMResponse *response) {
   if (response == NULL)
@@ -37,6 +38,6 @@ int llm_provider_destory(LLMProvider *provider, AgentError *error) {
     return AGENT_ERR_INVAILD_ARGUMENT;
   int status = provider->ops.destory(provider->ctx);
   if (status == AGENT_OK)
-    *provider = (LLMProvider){0};
+    memset(provider, 0, sizeof(*provider));
   return status;
 }

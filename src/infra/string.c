@@ -18,7 +18,7 @@ static size_t string_grow_capacity(size_t current, size_t required) {
 int string_init(String *str) {
   if (str == NULL)
     return AGENT_ERR_NULL_POINTER;
-  *str = (String){0};
+  memset(str, 0, sizeof(*str));
   return AGENT_OK;
 }
 
@@ -26,7 +26,7 @@ void string_destroy(String *str) {
   if (str == NULL)
     return;
   free(str->data);
-  *str = (String){0};
+  memset(str, 0, sizeof(*str));
 }
 
 int string_reserve(String *str, size_t capacity) {

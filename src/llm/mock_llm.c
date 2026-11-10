@@ -122,6 +122,11 @@ int mock_llm_init(LLMProvider *provider, const LLMResponse *responses,
       return status;
     }
   }
-  *provider = (LLMProvider){.ops = {mock_complete, mock_destroy}, .ctx = mock};
+  LLMProvider value;
+  memset(&value, 0, sizeof(value));
+  value.ops.complete = mock_complete;
+  value.ops.destory = mock_destroy;
+  value.ctx = mock;
+  *provider = value;
   return AGENT_OK;
 }
