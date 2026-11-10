@@ -43,17 +43,27 @@ static volatile sig_atomic_t g_interrupt = 0;
 /* Set while agent_run() is executing. Used only to decide whether echoing
  * "^C" is safe without trampling the live status line. */
 static volatile sig_atomic_t g_run_active = 0;
+/* Set once the full-screen backend owns the terminal. The signal handler only
+ * sets flags; ncurses is never touched from a handler. */
+static volatile sig_atomic_t g_fullscreen_active = 0;
+/* Signal that requested termination in full-screen mode, or 0. */
+static volatile sig_atomic_t g_terminate_signal = 0;
 
 static void on_sigint(int sig) {
   (void)sig;
   /* Setting the shared flag is async-signal-safe. The UI polls it and aborts
    * the in-flight request or tool; libcurl sees it through CURLOPT_XFERINFO. */
   g_interrupt = 1;
-  if (!g_run_active) {
+  if (!g_run_active && !g_fullscreen_active) {
     static const char message[] = "^C\n";
     ssize_t ignored = write(STDERR_FILENO, message, sizeof(message) - 1);
     (void)ignored;
   }
+}
+
+static void on_terminate(int sig) {
+  g_terminate_signal = sig;
+  g_interrupt = 1;
 }
 
 static void install_signal_handlers(void) {
@@ -71,6 +81,28 @@ static void install_signal_handlers(void) {
   sigemptyset(&ignore.sa_mask);
   ignore.sa_flags = 0;
   sigaction(SIGPIPE, &ignore, NULL);
+}
+
+/* Installed around the full-screen backend. If startup fails, the defaults are
+ * restored so line mode keeps its normal signal behavior. */
+static void install_terminate_handlers(void) {
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = on_terminate;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+  sigaction(SIGTERM, &sa, NULL);
+  sigaction(SIGHUP, &sa, NULL);
+}
+
+static void restore_terminate_handlers(void) {
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = SIG_DFL;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+  sigaction(SIGTERM, &sa, NULL);
+  sigaction(SIGHUP, &sa, NULL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -94,6 +126,7 @@ typedef struct {
   int stream;      /* --stream: print assistant text as it is generated. */
   int yes;         /* --yes: auto-approve mutating tools. */
   int read_only;   /* --read-only: deny mutating tools. */
+  int no_tui;      /* --no-tui: keep the line-oriented interactive REPL. */
 } CliOptions;
 
 typedef enum {
@@ -140,6 +173,7 @@ static void print_help(const char *program) {
       "      --session-id <id>      Session identifier (default: %s)\n"
       "  -y, --yes                  Auto-approve mutating tools\n"
       "      --read-only            Deny mutating tools; read-only tools run\n"
+      "      --no-tui               Keep the line-oriented interactive REPL\n"
       "  -q, --quiet                Suppress the per-round transcript\n"
       "  -v, --verbose              Print the transcript to stderr in --print "
       "mode\n"
@@ -236,6 +270,10 @@ static ArgsResult parse_args(int argc, char **argv, CliOptions *opts) {
     }
     if (strcmp(arg, "--read-only") == 0) {
       opts->read_only = 1;
+      continue;
+    }
+    if (strcmp(arg, "--no-tui") == 0) {
+      opts->no_tui = 1;
       continue;
     }
     if (strcmp(arg, "--json") == 0) {
@@ -504,6 +542,12 @@ static ToolDecision cli_approve(void *userdata, const char *tool_name,
   if (!policy->interactive)
     return TOOL_DECISION_DENY; /* Safe default when nobody can answer. */
 
+  if (ui_is_fullscreen(policy->ui)) {
+    ToolDecision decision = ui_approve(policy->ui, tool_name, arguments_json);
+    ui_set_phase(policy->ui, "thinking");
+    return decision;
+  }
+
   ui_clear_status(policy->ui);
   char preview[201];
   preview_arguments(arguments_json, preview, sizeof(preview));
@@ -668,10 +712,28 @@ static int run_once(Agent *agent, Session *session, const CliOptions *opts,
   return exit_code;
 }
 
+static void ui_report_run_error(Ui *ui, int status, const AgentError *error,
+                                long timeout_ms) {
+  char message[512];
+  snprintf(message, sizeof(message),
+           "Agent run failed: %.300s (error code: %d)",
+           error->message[0] ? error->message : "Unknown error", status);
+  ui_message(ui, message);
+  if (status == AGENT_ERR_HTTP_TIMEOUT) {
+    char advice[256];
+    snprintf(advice, sizeof(advice),
+             "HTTP request timed out (total limit: %ld ms). Check "
+             "network/proxy and API availability, or increase --timeout.",
+             timeout_ms);
+    ui_message(ui, advice);
+  }
+}
+
 static int run_interactive(Agent *agent, Session *session,
                            const CliOptions *opts, int show_prompt, Ui *ui) {
   int exit_code = EXIT_SUCCESS;
-  if (show_prompt) {
+  int fullscreen = ui_is_fullscreen(ui);
+  if (show_prompt && !fullscreen) {
     fprintf(stderr,
             "TinyAgent %s  model=%s  protocol=%s\n"
             "Type /help for commands, /exit to quit. Ctrl-C cancels a run.\n",
@@ -681,32 +743,70 @@ static int run_interactive(Agent *agent, Session *session,
   }
 
   for (;;) {
+    if (g_terminate_signal != 0) {
+      exit_code = 128 + (int)g_terminate_signal;
+      break;
+    }
     g_interrupt = 0;
-    ui_prompt(ui);
 
     char *line = NULL;
-    ReadResult read = read_line(stdin, &line);
-    if (read == READ_INTERRUPTED) {
-      fputc('\n', stderr);
-      g_interrupt = 0; /* First Ctrl-C at the prompt clears the line. */
+    if (fullscreen) {
+      ui_prompt(ui);
+      UiInputResult input = ui_read_input(ui, &line);
+      if (g_terminate_signal != 0) {
+        free(line);
+        exit_code = 128 + (int)g_terminate_signal;
+        break;
+      }
+      if (input == UI_INPUT_EOF)
+        break;
+      if (input == UI_INPUT_ERROR) {
+        exit_code = EXIT_FAILURE;
+        break;
+      }
+      if (input == UI_INPUT_INTERRUPTED) {
+        free(line);
+        g_interrupt = 0;
+        continue;
+      }
+    } else {
+      ui_prompt(ui);
+      ReadResult read = read_line(stdin, &line);
+      if (read == READ_INTERRUPTED) {
+        fputc('\n', stderr);
+        g_interrupt = 0; /* First Ctrl-C at the prompt clears the line. */
+        continue;
+      }
+      if (read == READ_EOF)
+        break;
+      if (read == READ_ERROR) {
+        fprintf(stderr, "Failed to read input.\n");
+        exit_code = EXIT_FAILURE;
+        break;
+      }
+    }
+
+    if (line == NULL)
       continue;
-    }
-    if (read == READ_EOF)
-      break;
-    if (read == READ_ERROR) {
-      fprintf(stderr, "Failed to read input.\n");
-      exit_code = EXIT_FAILURE;
-      break;
-    }
 
     if (strcmp(line, "/exit") == 0 || strcmp(line, "/quit") == 0) {
       free(line);
       break;
     }
     if (strcmp(line, "/help") == 0) {
-      printf("Commands:\n"
-             "  /help   Show this help\n"
-             "  /exit   Quit (also /quit or Ctrl-D)\n");
+      if (fullscreen) {
+        ui_message(ui, "Commands:\n"
+                       "  /help   Show this help\n"
+                       "  /exit   Quit (also /quit or Ctrl-D)\n"
+                       "Keys: Enter send, Ctrl-J newline, Up/Down history,\n"
+                       "      PgUp/PgDn scroll, Ctrl-End bottom, Ctrl-C "
+                       "cancel,\n"
+                       "      Ctrl-D exit when the input is empty.");
+      } else {
+        printf("Commands:\n"
+               "  /help   Show this help\n"
+               "  /exit   Quit (also /quit or Ctrl-D)\n");
+      }
       free(line);
       continue;
     }
@@ -722,31 +822,56 @@ static int run_interactive(Agent *agent, Session *session,
     int status = agent_run(agent, session, line, &output, &error);
     g_run_active = 0;
     free(line);
+    if (g_terminate_signal != 0) {
+      string_destroy(&output);
+      exit_code = 128 + (int)g_terminate_signal;
+      break;
+    }
     if (status == AGENT_ERR_CANCELLED) {
-      fprintf(stderr, "\n[cancelled]\n");
+      if (!fullscreen)
+        fprintf(stderr, "\n[cancelled]\n");
       g_interrupt = 0;
       string_destroy(&output);
+      if (ui_failed(ui)) {
+        exit_code = EXIT_FAILURE;
+        break;
+      }
       continue;
     }
     if (status != AGENT_OK) {
-      exit_code = report_run_error(status, &error, opts->timeout_ms);
+      if (fullscreen) {
+        if (!ui_run_ended(ui))
+          ui_report_run_error(ui, status, &error, opts->timeout_ms);
+      } else {
+        exit_code = report_run_error(status, &error, opts->timeout_ms);
+      }
       string_destroy(&output);
+      if (ui_failed(ui)) {
+        exit_code = EXIT_FAILURE;
+        break;
+      }
       continue;
     }
-    if (opts->stream && ui_streamed(ui)) {
-      if (ui_finish_stream(ui) != 0) {
+    if (!fullscreen) {
+      if (opts->stream && ui_streamed(ui)) {
+        if (ui_finish_stream(ui) != 0) {
+          fprintf(stderr, "Failed to write output.\n");
+          exit_code = CLI_EXIT_RUNTIME;
+          string_destroy(&output);
+          break;
+        }
+      } else if (ui_print_answer(string_c_str(&output)) != 0) {
         fprintf(stderr, "Failed to write output.\n");
         exit_code = CLI_EXIT_RUNTIME;
         string_destroy(&output);
         break;
       }
-    } else if (ui_print_answer(string_c_str(&output)) != 0) {
-      fprintf(stderr, "Failed to write output.\n");
-      exit_code = CLI_EXIT_RUNTIME;
-      string_destroy(&output);
-      break;
     }
     string_destroy(&output);
+    if (ui_failed(ui)) {
+      exit_code = EXIT_FAILURE;
+      break;
+    }
   }
   return exit_code;
 }
@@ -759,6 +884,15 @@ static int terminal_supports_status(void) {
     return 0;
   const char *no_color = getenv("NO_COLOR");
   return no_color == NULL || no_color[0] == '\0';
+}
+
+/* The full-screen UI needs all three standard streams on a real terminal and a
+ * usable terminfo entry. NO_COLOR only disables the line-mode status escape. */
+static int terminal_can_fullscreen(void) {
+  const char *term = getenv("TERM");
+  if (term == NULL || term[0] == '\0' || strcmp(term, "dumb") == 0)
+    return 0;
+  return isatty(STDIN_FILENO) && isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
 }
 
 int main(int argc, char **argv) {
@@ -799,7 +933,9 @@ int main(int argc, char **argv) {
                         .status = status_tty ? stderr : NULL,
                         .tty = status_tty,
                         .stream_to_stdout = opts.stream && !opts.output_json,
-                        .cancel_flag = &g_interrupt};
+                        .quiet = opts.quiet,
+                        .cancel_flag = &g_interrupt,
+                        .terminate_flag = &g_terminate_signal};
   Ui *ui = ui_create(&ui_config);
   if (ui == NULL) {
     fprintf(stderr, "error: could not initialize the terminal UI\n");
@@ -865,13 +1001,36 @@ int main(int argc, char **argv) {
   if (status != AGENT_OK)
     goto done;
 
+  int fullscreen = opts.prompt == NULL && !opts.no_tui && !opts.output_json &&
+                   terminal_can_fullscreen();
+  if (fullscreen) {
+    const char *protocol =
+        opts.protocol == PROTOCOL_RESPONSES ? "responses" : "chat_completions";
+    install_terminate_handlers();
+    if (ui_start_fullscreen(ui, opts.model, protocol, opts.session_id) != 0) {
+      restore_terminate_handlers();
+      fullscreen = 0;
+      fprintf(stderr, "warning: full-screen UI unavailable; using line mode\n");
+    } else {
+      g_fullscreen_active = 1;
+      install_signal_handlers();
+    }
+  }
+
   if (opts.prompt != NULL) {
     exit_code = run_once(agent, session, &opts, ui);
   } else {
-    exit_code = run_interactive(agent, session, &opts, prompt_enabled, ui);
+    exit_code = run_interactive(agent, session, &opts,
+                                prompt_enabled && !fullscreen, ui);
   }
 
 done:
+  g_fullscreen_active = 0;
+  ui_stop_fullscreen(ui);
+  if (ui_failed(ui)) {
+    fprintf(stderr, "error: terminal UI failed\n");
+    exit_code = EXIT_FAILURE;
+  }
   if (status != AGENT_OK) {
     fprintf(stderr, "%s failed (error code: %d)%s%s.\n", stage, status,
             error.message[0] ? ": " : "", error.message);

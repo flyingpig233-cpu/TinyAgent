@@ -65,7 +65,7 @@ flowchart LR
 | `src/context/` | Conversation history and session state. |
 | `src/memory/` | Empty placeholder; not referenced by CMake. |
 | `include/agent/` | Public headers. Internal-only headers stay in `src/` (`src/tools/internal.h`, `src/llm/providers/openai_internal.h`). |
-| `app/` | CLI entry point (`main.c`), terminal UI/events/status line (`ui.c`). |
+| `app/` | CLI entry point (`main.c`), terminal UI/events/status line (`ui.c`), ncursesw full-screen backend (`tui.c`). |
 | `tests/` | C unit/integration tests mapped into CTest, plus Python fake-server/CLI drivers. |
 | `build/` | CMake/Ninja output; gitignored. Contains `compile_commands.json`. |
 
@@ -151,13 +151,14 @@ find src app include tests -name '*.c' -o -name '*.h' | xargs clang-format -i
 | `src/llm/providers/openai.c` | Base URL normalization, endpoint joining, provider init/destroy. |
 | `src/infra/http_client.c` | libcurl transport, timeouts, response ownership. |
 | `app/main.c` | CLI parsing, defaults, run modes, JSON output, exit codes. |
-| `app/ui.c` | Terminal transcript, spinner/status line, approval prompt, deltas. |
+| `app/ui.c` | Terminal facade: line-mode transcript/spinner plus full-screen delegation. |
+| `app/tui.c` | ncursesw full-screen backend: layout, editor, history, scrollback, approval. |
 | `tests/CMakeLists.txt` | All test registration, timeouts, Python gating. |
 
 ## Runtime/Tooling Preferences
 
 - **Compiler/runtime:** C17 (`CMAKE_C_EXTENSIONS OFF`), GCC/Clang on POSIX. CMake ≥ 3.16; Ninja is the generator in the existing build tree.
-- **Dependencies:** libcurl (`CURL::libcurl`), cJSON via pkg-config (`libcjson`), POSIX libc. Python 3 is optional and only enables integration tests.
+- **Dependencies:** libcurl (`CURL::libcurl`), cJSON (`find_package(cJSON CONFIG)` for the core library; pkg-config `libcjson` for tests), ncursesw (`find_package(Curses)` with `CURSES_NEED_WIDE`), POSIX libc. Python 3 is optional and only enables integration tests.
 - **Runtime dependency:** `rg` (ripgrep) must be on `PATH` for the `search` tool.
 - **Build artifacts:** `build/` is ignored and untracked; do not commit `.VSCodeCounter/`, object files, or generated libraries. `compile_commands.json` lives at `build/compile_commands.json`.
 - **No install rules, no CI, no CMake presets, no sanitizer targets.** Do not assume `cmake --install` works.

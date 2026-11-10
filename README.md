@@ -4,9 +4,10 @@ A small C17 agent with a reusable HTTP transport and an OpenAI-compatible provid
 
 ## Build and test
 
-Requires CMake, a C17 compiler, libcurl, and libcJSON. The coding tools target
-POSIX systems; `search` also requires `rg` (ripgrep) on PATH. Python 3 enables the local
-HTTP integration tests. No API key is needed to run the tests.
+Requires CMake, a C17 compiler, libcurl, libcJSON, and the wide-character
+ncurses development package (`ncursesw`). The coding tools target POSIX
+systems; `search` also requires `rg` (ripgrep) on PATH. Python 3 enables the
+local HTTP integration tests. No API key is needed to run the tests.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
@@ -251,12 +252,27 @@ interrupted mid-flight, but libcurl and the tool process loop both poll every
 
 ### Terminal UI
 
-The CLI renders through a single writer. Prompt and the live status line
-(`thinking  1.2s (round 2)`) go to stderr, answers and streamed text go to
-stdout, and the per-round transcript stays on its documented sink. The status
-line uses ANSI cursor movement, so it is disabled when stderr is not a TTY or
-`TERM=dumb` or `NO_COLOR` is set; `--json` never draws it. Piped and `--print`
-runs therefore keep stdout byte-clean.
+Interactive sessions started on a real terminal use a full-screen ncursesw
+layout: a scrollable conversation, a fixed input area, a status line and
+full-screen tool approval. Input supports UTF-8 editing, multiline text
+(`Ctrl-J`), in-memory history (`Up`/`Down`), bracketed paste, scrolling
+(`PgUp`/`PgDn`, `Ctrl-End` for the newest content) and resizing. The TUI is
+enabled only when stdin, stdout and stderr are TTYs, `TERM` is usable, and no
+prompt/`--json` mode was selected. `--no-tui` keeps the line-oriented REPL, and
+an unusable terminal or missing UTF-8 locale falls back to it automatically.
+
+The line-oriented fallback still renders through a single writer. Prompt and the
+live status line (`thinking  1.2s (round 2)`) go to stderr, answers and streamed
+text go to stdout, and the per-round transcript stays on its documented sink.
+The status line uses ANSI cursor movement, so it is disabled when stderr is not
+a TTY or `TERM=dumb` or `NO_COLOR` is set; `--json` never draws it. Piped and
+`--print` runs therefore keep stdout byte-clean. In the full-screen UI,
+`NO_COLOR` leaves the monochrome layout unchanged.
+
+Ctrl-C cancels an in-flight request or tool. At the input prompt it clears the
+current draft; Ctrl-D exits when the draft is empty. Tool approval accepts only
+`y`, `n` or `a`; Enter and Escape deny, and Ctrl-C cancels the run. SIGTERM and
+SIGHUP restore the terminal and exit with `128 + signal`.
 
 ### Built-in coding tools
 

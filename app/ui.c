@@ -6,8 +6,9 @@
 #include <string.h>
 #include <time.h>
 
+#include "tui.h"
+
 #define UI_TICK_MS 100
-#define UI_TOOL_OUTPUT_LIMIT 500
 
 struct Ui {
   UiConfig config;
@@ -22,6 +23,8 @@ struct Ui {
   const char *phase;
   long run_started_ms;
   long last_tick_ms;
+  Tui *tui;
+  int run_ended;
 };
 
 static long monotonic_ms(void) {
@@ -42,14 +45,78 @@ Ui *ui_create(const UiConfig *config) {
   return ui;
 }
 
-void ui_destroy(Ui *ui) { free(ui); }
+void ui_destroy(Ui *ui) {
+  if (ui == NULL)
+    return;
+  if (ui->tui != NULL)
+    tui_destroy(ui->tui);
+  free(ui);
+}
+
+/* ------------------------------------------------------------------ */
+/* Full-screen facade                                                  */
+/* ------------------------------------------------------------------ */
+
+int ui_start_fullscreen(Ui *ui, const char *model, const char *protocol,
+                        const char *session_id) {
+  if (ui == NULL)
+    return -1;
+  if (ui->tui == NULL) {
+    ui->tui = tui_create();
+    if (ui->tui == NULL)
+      return -1;
+  }
+  return tui_start(ui->tui, model, protocol, session_id, ui->config.quiet,
+                   ui->config.cancel_flag, ui->config.terminate_flag);
+}
+
+void ui_stop_fullscreen(Ui *ui) {
+  if (ui != NULL && ui->tui != NULL)
+    tui_stop(ui->tui);
+}
+
+int ui_is_fullscreen(const Ui *ui) {
+  return ui != NULL && ui->tui != NULL && tui_active(ui->tui);
+}
+
+UiInputResult ui_read_input(Ui *ui, char **out) {
+  if (out != NULL)
+    *out = NULL;
+  if (ui == NULL || !ui_is_fullscreen(ui))
+    return UI_INPUT_ERROR;
+  return (UiInputResult)tui_read_input(ui->tui, out);
+}
+
+ToolDecision ui_approve(Ui *ui, const char *tool_name,
+                        const char *arguments_json) {
+  if (ui == NULL || !ui_is_fullscreen(ui))
+    return TOOL_DECISION_DENY;
+  return tui_approve(ui->tui, tool_name, arguments_json);
+}
+
+void ui_message(Ui *ui, const char *text) {
+  if (ui == NULL || text == NULL)
+    return;
+  if (ui_is_fullscreen(ui)) {
+    tui_message(ui->tui, text);
+    return;
+  }
+  fprintf(stderr, "%s\n", text);
+}
+
+int ui_failed(const Ui *ui) {
+  return ui != NULL && ui->tui != NULL && tui_failed(ui->tui);
+}
+
+int ui_run_ended(const Ui *ui) { return ui != NULL && ui->run_ended; }
 
 /* ------------------------------------------------------------------ */
 /* Status line                                                         */
 /* ------------------------------------------------------------------ */
 
 void ui_clear_status(Ui *ui) {
-  if (ui == NULL || !ui->status_visible || ui->config.status == NULL)
+  if (ui == NULL || ui_is_fullscreen(ui) || !ui->status_visible ||
+      ui->config.status == NULL)
     return;
   fputs("\r\033[K", ui->config.status);
   fflush(ui->config.status);
@@ -83,6 +150,10 @@ static void ui_tick(Ui *ui) {
 void ui_set_phase(Ui *ui, const char *phase) {
   if (ui == NULL)
     return;
+  if (ui_is_fullscreen(ui)) {
+    tui_set_phase(ui->tui, phase);
+    return;
+  }
   ui->phase = phase != NULL ? phase : "working";
   ui_clear_status(ui);
   ui->last_tick_ms = 0;
@@ -102,6 +173,11 @@ int ui_poll(void *userdata) {
   Ui *ui = userdata;
   if (ui == NULL)
     return 0;
+  if (ui_is_fullscreen(ui)) {
+    if (tui_poll(ui->tui))
+      return 1;
+    return ui->config.cancel_flag != NULL && *ui->config.cancel_flag != 0;
+  }
   ui_tick(ui);
   return ui->config.cancel_flag != NULL && *ui->config.cancel_flag != 0;
 }
@@ -155,6 +231,13 @@ void ui_on_event(void *userdata, const AgentEvent *event) {
    * how many model rounds the run took. */
   if (event->type == AGENT_EVENT_LLM_RESPONSE && event->round > ui->rounds)
     ui->rounds = event->round;
+  if (event->type == AGENT_EVENT_RUN_END)
+    ui->run_ended = 1;
+
+  if (ui_is_fullscreen(ui)) {
+    tui_on_event(ui->tui, event);
+    return;
+  }
 
   FILE *out = ui->config.transcript;
   switch (event->type) {
@@ -249,10 +332,14 @@ void ui_on_event(void *userdata, const AgentEvent *event) {
 /* ------------------------------------------------------------------ */
 
 void ui_on_delta(void *userdata, int round, const char *text) {
-  (void)round;
   Ui *ui = userdata;
-  if (ui == NULL || !ui->config.stream_to_stdout || text == NULL ||
-      text[0] == '\0')
+  if (ui == NULL)
+    return;
+  if (ui_is_fullscreen(ui)) {
+    tui_on_delta(ui->tui, round, text);
+    return;
+  }
+  if (!ui->config.stream_to_stdout || text == NULL || text[0] == '\0')
     return;
   if (!ui->streaming) {
     ui_clear_status(ui);
@@ -268,6 +355,8 @@ void ui_on_delta(void *userdata, int round, const char *text) {
 int ui_finish_stream(Ui *ui) {
   if (ui == NULL)
     return -1;
+  if (ui_is_fullscreen(ui))
+    return 0;
   if (ui->streamed_needs_newline) {
     if (fputc('\n', stdout) == EOF)
       return -1;
@@ -294,7 +383,7 @@ int ui_print_answer(const char *text) {
 /* ------------------------------------------------------------------ */
 
 void ui_prompt(Ui *ui) {
-  if (ui == NULL || ui->config.status == NULL)
+  if (ui == NULL || ui_is_fullscreen(ui) || ui->config.status == NULL)
     return;
   fputs("Input: ", ui->config.status);
   fflush(ui->config.status);
@@ -303,6 +392,9 @@ void ui_prompt(Ui *ui) {
 void ui_reset_run(Ui *ui) {
   if (ui == NULL)
     return;
+  ui->run_ended = 0;
+  if (ui_is_fullscreen(ui))
+    tui_reset_run(ui->tui);
   ui->streamed = 0;
   ui->streamed_needs_newline = 0;
   ui->streaming = 0;

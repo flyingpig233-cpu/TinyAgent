@@ -106,4 +106,10 @@ if (Python3_Interpreter_FOUND)
     add_test(NAME test_cli_cancel
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/cli_cancel_test.py $<TARGET_FILE:tiny-agent>)
     set_tests_properties(test_cli_cancel PROPERTIES TIMEOUT 40)
+    add_test(NAME test_cli_tui
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/cli_tui_test.py $<TARGET_FILE:tiny-agent>)
+    set_tests_properties(test_cli_tui PROPERTIES TIMEOUT 60)
+    add_test(NAME test_cli_tui_approval
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/cli_tui_approval_test.py $<TARGET_FILE:tiny-agent>)
+    set_tests_properties(test_cli_tui_approval PROPERTIES TIMEOUT 60)
 endif()

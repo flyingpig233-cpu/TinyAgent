@@ -13,6 +13,8 @@
  * terminal is not capable the Ui degrades to plain line output and never emits
  * ANSI escapes or touches stdout for status messages. */
 
+#define UI_TOOL_OUTPUT_LIMIT 500
+
 typedef struct Ui Ui;
 
 typedef struct {
@@ -20,8 +22,17 @@ typedef struct {
   FILE *status;         /* Spinner/state line sink; NULL disables. */
   int tty;              /* 1 enables the redrawn status line. */
   int stream_to_stdout; /* 1 when deltas go to stdout. */
-  volatile sig_atomic_t *cancel_flag; /* Optional shared cancel flag. */
+  int quiet;            /* 1 hides tool/round details in the full-screen UI. */
+  volatile sig_atomic_t *cancel_flag;    /* Optional shared cancel flag. */
+  volatile sig_atomic_t *terminate_flag; /* Optional termination flag. */
 } UiConfig;
+
+typedef enum {
+  UI_INPUT_OK = 0,
+  UI_INPUT_EOF,
+  UI_INPUT_INTERRUPTED,
+  UI_INPUT_ERROR
+} UiInputResult;
 
 Ui *ui_create(const UiConfig *config);
 void ui_destroy(Ui *ui);
@@ -34,6 +45,20 @@ void ui_on_delta(void *userdata, int round, const char *text);
  * pumps the spinner on the way. Usable as AgentConfig.is_cancelled and
  * ToolContext.is_cancelled (pass the Ui pointer as userdata). */
 int ui_poll(void *userdata);
+
+/* Full-screen backend. ui_start_fullscreen() returns 0 on success and cleans
+ * up on failure; ui_stop_fullscreen() is idempotent and restores the
+ * terminal. */
+int ui_start_fullscreen(Ui *ui, const char *model, const char *protocol,
+                        const char *session_id);
+void ui_stop_fullscreen(Ui *ui);
+int ui_is_fullscreen(const Ui *ui);
+UiInputResult ui_read_input(Ui *ui, char **out);
+ToolDecision ui_approve(Ui *ui, const char *tool_name,
+                        const char *arguments_json);
+void ui_message(Ui *ui, const char *text);
+int ui_failed(const Ui *ui);
+int ui_run_ended(const Ui *ui);
 
 /* Interactive helpers. ui_prompt() prints "Input: " when a status sink exists.
  * ui_clear_status() removes the live status line before direct terminal output
