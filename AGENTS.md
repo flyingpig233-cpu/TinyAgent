@@ -185,7 +185,7 @@ find src app include tests -name '*.c' -o -name '*.h' | xargs clang-format -i
 
 **Framework and shape**
 
-- No third-party test framework. Each C test is a standalone executable with `int main(void)` returning 0/1. Most use a local `CHECK(expr)` macro that prints to stderr and returns 1; `test_tool_registry.c` uses `assert`; a few older tests use explicit exit codes.
+- No third-party test framework. Each C test is a standalone executable with `int main(void)` returning 0/1. Most use a local `CHECK(expr)` macro that prints to stderr and returns 1; a few older tests use explicit exit codes.
 - `include/agent/mock_llm.h` + `src/llm/mock_llm.c` are part of the library. `mock_llm_init(&provider, responses, count)` deep-copies fixtures and replays them in order; exhaustion returns `AGENT_ERR_INVAILD_ARGUMENT`. Destroy with `llm_provider_destory`.
 - Integration tests use Python stdlib only: `ThreadingHTTPServer` on `127.0.0.1:0` (ephemeral port), a daemon thread, and a child binary receiving the base URL as `argv[1]`. There are no fixed ports and no inter-test ordering.
 - Python drivers are named `<area>_test.py` (not `test_*.py`), while C tests are `test_<area>.c` with a matching CTest name.
@@ -209,7 +209,7 @@ python3 tests/openai_server_test.py build/tests/test_openai_complete
 **Pitfalls**
 
 - `test_agent.c` is an empty placeholder that always passes; the real loop coverage is `test_agent_run.c`.
-- In Release builds, `NDEBUG` removes `assert` from `test_tool_registry.c`; use Debug.
+- Tests must not depend on `assert`: Release builds define `NDEBUG`, so use the `CHECK` macro for assertions that must hold in every build type.
 - If Python 3 is missing, the Python-driven CTest entries silently disappear — check `ctest -N` counts, not just "all tests passed".
 - `test_coding_tools` hard-fails without `rg`; POSIX `/bin/sh` is required. There are no skip conditions.
 - Several tests are timing-sensitive (50 ms timeout vs 200 ms server delay, cancellation assertions under 2 s). Prefer generous margins; do not add sleeps without need.
